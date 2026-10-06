@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>浏览页面</title>
+  <link rel="stylesheet" href="css/fontawesome.min.css">
+  <link rel="stylesheet" href="css/browser.css">
+</head>
+<body>
+  <div class="br-toolbar">
+    <button class="br-btn" id="brBack" title="后退"><i class="fas fa-arrow-left"></i></button>
+    <button class="br-btn" id="brForward" title="前进"><i class="fas fa-arrow-right"></i></button>
+    <button class="br-btn" id="brReload" title="刷新"><i class="fas fa-rotate-right"></i></button>
+    <input type="text" class="br-url" id="brUrl" placeholder="输入网址后回车" spellcheck="false">
+    <button class="br-btn" id="brGo" title="前往"><i class="fas fa-angles-right"></i></button>
+
+
+
+    <!-- ★ 拖动区域：按住这里可以拖动窗口 -->
+    <div class="br-drag-space" title="按住拖动窗口"></div>
+
+    <button class="br-btn br-dl-btn" id="brDownloads" title="下载内容">
+      <i class="fas fa-download"></i>
+      <span class="br-dl-badge" id="brDlBadge" style="display:none;">0</span>
+    </button>
+
+    <div class="br-win-controls">
+      <button class="br-win-btn" id="brMin" title="最小化"><i class="fas fa-minus"></i></button>
+      <button class="br-win-btn" id="brMax" title="最大化"><i class="fas fa-square"></i></button>
+      <button class="br-win-btn br-win-close" id="brClose" title="关闭"><i class="fas fa-times"></i></button>
+    </div>
+  </div>
+
+  <div class="br-downloads" id="brDownloadsPanel" style="display:none;">
+    <div class="br-dl-header">
+      <span>下载内容</span>
+      <button class="br-dl-close" id="brDlClose"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="br-dl-list" id="brDlList"></div>
+  </div>
+
+  <script src="js/browser-ui.js"></script>
+</body>
+</html>

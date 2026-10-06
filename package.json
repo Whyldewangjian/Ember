@@ -1,0 +1,74 @@
+{
+  "name": "Ember",
+  "version": "1.3.0",
+  "description": "Ember",
+  "main": "main.js",
+  "author": "Whylde",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "build": "node build-config.js editable && cross-env EXE_SUFFIX=editable electron-builder --win portable",
+    "build:editable": "node build-config.js editable && cross-env EXE_SUFFIX=editable electron-builder --win nsis portable",
+    "build:locked": "node build-config.js locked && cross-env EXE_SUFFIX=locked electron-builder --win nsis portable",
+    "build:installer": "node build-config.js locked && cross-env EXE_SUFFIX=locked electron-builder --win nsis",
+    "build:portable": "node build-config.js locked && cross-env EXE_SUFFIX=locked electron-builder --win portable"
+  },
+  "devDependencies": {
+    "cross-env": "^7.0.3",
+    "electron": "^31.7.7",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.whylde.llm-assistant",
+    "productName": "Ember",
+    "files": [
+      "main.js",
+      "index.html",
+      "browser.html",
+      "changelog.txt",
+      "logo.ico",
+      "package.json",
+      "css/**/*",
+      "webfonts/**/*",
+      "js/**/*",
+      "image/**/*",
+      "build/**/*"
+    ],
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "icon": "build/icon.ico",
+      "artifactName": "${productName}-${version}-${env.EXE_SUFFIX}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Ember",
+      "artifactName": "Ember-${version}-Setup.${ext}",
+      "deleteAppDataOnUninstall": false,
+      "runAfterFinish": true
+    },
+    "portable": {
+      "artifactName": "${productName}-${version}-${env.EXE_SUFFIX}.${ext}"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "YOUR_GITHUB_USERNAME",
+        "repo": "Ember",
+        "releaseType": "release"
+      }
+    ]
+  },
+  "dependencies": {
+    "@fortawesome/fontawesome-free": "^7.3.1"
+  },
+  "allowScripts": {
+    "electron@31.7.7": true
+  }
+}

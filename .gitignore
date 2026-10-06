@@ -1,0 +1,37 @@
+# ===== 敏感数据（含明文 API Key，绝对不能提交）=====
+_apis_recovered.json
+_ember_storage.json
+_restore_sessions.json
+_*.json
+
+# ===== 打包产物 =====
+dist/
+builder-cache/
+.electron-builder-cache/
+.npm-cache/
+
+# ===== 依赖 =====
+node_modules/
+
+# ===== 备份文件 =====
+*.bak
+package.json.bak
+
+# ===== 系统与编辑器杂物 =====
+Thumbs.db
+Desktop.ini
+desktop.ini
+.DS_Store
+*.swp
+*~
+.vscode/
+.idea/
+
+# ===== 日志 =====
+*.log
+pack-log.txt
+ember-error.txt
+diag-*
+
+# ===== 运行时临时文件 =====
+*.tmp

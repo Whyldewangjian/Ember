@@ -1,0 +1,851 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LLM 智能助手</title>
+  <link rel="stylesheet" href="css/fontawesome.min.css">
+  <link rel="stylesheet" href="css/style.css">
+  <link rel="stylesheet" href="css/workshop.css">
+</head>
+<body>
+
+  <!-- 顶部栏（可拖拽移动窗口） -->
+  <div class="top-bar">
+    <div class="app-logo">
+      <img src="image/Ember_Logo.png" class="app-logo-wide" alt="Ember">
+      <div class="app-title-wrap">
+        <span class="app-version">v 1.3.0</span>
+      </div>      
+    </div>
+    <div class="right-actions">
+      <div class="status-bar">
+        <span class="model-select-label">模型选择 -</span>
+        <select id="homeModelSelect" class="home-model-select" title="选择模型"></select>
+        <span class="status-text" id="statusText" style="display:none;">检测中...</span>
+        <span class="status-dot" id="statusDot" title="连接状态"></span>
+      </div>
+
+
+      <button class="history-btn" id="historyBtn" title="历史记录"><i class="fas fa-history" data-icon-key="history"></i> 历史</button>
+      <button class="settings-btn" id="settingsBtn"><i class="fas fa-cog" data-icon-key="settings"></i> 设置</button>
+      <div class="win-controls">
+        <button class="win-btn" id="dockBtn" title="吸附到右侧"><i class="fas fa-arrow-right-to-bracket"></i></button>
+        <button class="win-btn" id="winMinBtn" title="最小化"><i class="fas fa-minus"></i></button>
+        <button class="win-btn" id="winMaxBtn" title="最大化"><i class="fas fa-square"></i></button>
+        <button class="win-btn win-close" id="winCloseBtn" title="关闭"><i class="fas fa-times"></i></button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 主区域 -->
+  <div class="main-area">
+    <div class="left-panel">
+      <div class="card">
+        <div class="card-header">
+          <span class="card-icon"><i class="fas fa-comment-dots" data-icon-key="input"></i></span>
+          <span class="card-title">提示词内容</span><button class="fr-toggle-btn" id="frToggleBtn" title="搜索 / 替换（Ctrl+F）"><i class="fas fa-search"></i></button>
+          <span class="card-badge"><i class="fas fa-user"></i> 用户输入</span>
+        </div>
+        <!-- ★ 搜索 / 替换条 -->
+        <div class="find-replace-bar collapsed" id="findReplaceBar">
+          <input type="text" id="findInput" class="fr-input" placeholder="搜索内容">
+          <select id="findMode" class="fr-select">
+            <option value="find">只搜索</option>
+            <option value="replace">替换为</option>
+          </select>
+          <input type="text" id="replaceInput" class="fr-input" placeholder="替换内容" disabled>
+          <button class="fr-btn" id="findRunBtn"><i class="fas fa-search"></i> 执行</button>
+        </div>
+        <!-- ★ 图片预览条：拖拽/粘贴上传参考图 -->
+        <div class="img-preview-bar" id="imgPreviewBar">
+          <div class="img-preview-empty" id="imgPreviewEmpty">
+            <i class="fas fa-image"></i> 点击浏览/拖拽图片到此处，或 Ctrl+V 粘贴
+          </div>
+        </div>
+        <!-- ★ 输入框 + 搜索高亮层 -->
+        <div class="fr-textarea-wrap">
+          <div class="fr-highlight-layer" id="hlInput1"></div>
+          <textarea id="input1" placeholder="请输入提示词内容..."></textarea>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-header">
+          <span class="card-icon"><i class="fas fa-cog" data-icon-key="preset"></i></span>
+          <span class="card-title">系统预设</span>
+          <select id="presetSelect" class="preset-select"><option value="">选择预设...</option></select>
+          <button class="preset-edit-btn" id="presetEditBtn"><i class="fas fa-pen"></i> 预设编辑</button>
+          <span class="card-badge"><i class="fas fa-robot" data-icon-key="presetBadge"></i> 系统设定</span>
+        </div>
+        <!-- ★ 输入框 + 搜索高亮层 -->
+        <div class="fr-textarea-wrap">
+          <div class="fr-highlight-layer" id="hlInput2"></div>
+          <textarea id="input2" placeholder="请输入具体的预设要求"></textarea>
+        </div>
+      </div>
+    </div>
+    <div class="right-panel">
+      <div class="card">
+        <div class="card-header">
+          <span class="card-icon"><i class="fas fa-lightbulb" data-icon-key="output"></i></span>
+          <span class="card-title">AI 回复</span>
+          <button class="copy-btn" id="copyBtn" title="复制结果" style="display:none;">
+            <i class="far fa-copy"></i> 复制
+          </button>
+          <button class="copy-btn" id="saveResultBtn" title="保存结果" style="display:none;">
+            <i class="fas fa-save"></i> 保存结果
+          </button>
+          <span class="card-badge"><i class="fas fa-sparkles" data-icon-key="badge"></i> 输出结果</span>
+        </div>
+        <div class="output-area" id="output">
+          <div class="empty-state">
+            <i class="fas fa-arrow-right"></i>
+            <p>等待 AI 回复...</p>
+          </div>
+        </div>
+        <div class="output-meta meta-line" id="outputMeta" style="display:none;"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 底部按钮 -->
+  <div class="bottom-bar">
+    <button class="run-btn" id="runBtn"><i class="fas fa-paper-plane" data-icon-key="run"></i> 输出结果<kbd class="kbd-hint">Ctrl ↵</kbd></button>
+
+    <button class="stop-btn" id="stopBtn"><i class="fas fa-stop"></i> 停止</button>
+  </div>
+
+  <!-- 设置弹窗 -->
+  <div class="modal-overlay" id="modal">
+    <div class="modal glass-modal">
+      <div class="modal-header">
+        <h2><i class="fas fa-sliders-h" data-icon-key="settingsTitle"></i> 设置中心</h2>
+        <span class="modal-subtitle">管理 API 配置与应用外观</span>
+      </div>
+      <div class="modal-body">
+        <div class="modal-left">
+          <h3><i class="fas fa-plug" data-icon-key="api"></i> API 配置</h3>
+          <div id="apiList" class="api-list"></div>
+          <button class="add-api-btn" id="addApiBtn"><i class="fas fa-plus"></i> 添加 API</button>
+        </div>
+        <div class="modal-right">
+
+          <div class="collapse-group open" id="colorCollapseGroup">
+            <div class="collapse-header" id="colorCollapseHeader">
+              <span><i class="fas fa-palette" data-icon-key="appearance"></i> 外观设置</span>
+              <i class="fas fa-chevron-down collapse-arrow"></i>
+            </div>
+            <div class="collapse-body" id="colorCollapseBody">
+
+              <label>🎨 颜色主题</label>
+              <select id="themeSelect" class="font-select">
+                <option value="default">绿色</option>
+                <option value="blue">蓝色</option>
+                <option value="pink">粉色</option>
+                <option value="orange">橙色</option>
+              </select>
+              <div class="color-hint">选择后立即应用全部配色与图标</div>
+
+              <label class="mt-15">🔠 对话文字大小</label>
+              <select id="chatFontSelect" class="font-select">
+                <option value="small">小</option>
+                <option value="medium">中</option>
+                <option value="large">大</option>
+              </select>
+              <div class="color-hint">只影响对话模式的输入框与消息文字</div>
+
+              <!-- ★ 标题编辑区（locked 版打包时整块隐藏） -->
+              <div id="titleEditSection">
+                <label class="mt-15">🏷️ 主页面标题</label>
+                <input type="text" id="appTitleInput" placeholder="Whylde的牛逼小助手" maxlength="30">
+                <div class="color-hint">左上角标题文字</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="collapse-group mt-15 open" id="convCollapseGroup">
+            <div class="collapse-header" id="convCollapseHeader">
+              <span><i class="fas fa-comments" data-icon-key="conv"></i> 对话设置</span>
+              <i class="fas fa-chevron-down collapse-arrow"></i>
+            </div>
+            <div class="collapse-body" id="convCollapseBody">
+
+              <label>💬 对话记忆轮数</label>
+              <input type="number" id="memRoundsInput" min="0" max="20" value="5">
+              <div class="color-hint">AI 记住最近几轮对话（0 = 不记忆，每次独立问答）</div>
+
+              <button class="clear-mem-btn mt-15" id="clearMemBtn">🧹 清空对话记忆</button>
+
+            </div>
+          </div>
+
+          <div class="tip-box">
+            <i class="fas fa-info-circle"></i>
+            修改后点击"保存设置"才会永久生效
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="cancel-btn" id="cancelBtn"><i class="fas fa-times"></i> 取消</button>
+        <button class="save-btn" id="saveBtn"><i class="fas fa-check"></i> 保存设置</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 预设编辑弹窗 -->
+  <div class="modal-overlay" id="presetModal">
+    <div class="modal glass-modal preset-modal">
+      <div class="modal-header">
+        <h2><i class="fas fa-pen"></i> 预设编辑</h2>
+        <span class="modal-subtitle">管理和编辑系统预设</span>
+      </div>
+      <div class="modal-body">
+        <div class="preset-sidebar">
+          <h3><i class="fas fa-list" data-icon-key="presetList"></i> 预设列表</h3>
+          <div id="presetList" class="preset-list"></div>
+          <button class="add-api-btn" id="presetAddBtn"><i class="fas fa-plus"></i> 新建预设</button>
+        </div>
+        <div class="preset-editor">
+          <label>预设名称</label>
+          <input type="text" id="presetNameInput" placeholder="例如：写作助手">
+          <label style="margin-top: 15px;">预设内容</label>
+          <textarea id="presetContentInput" class="preset-content-input" placeholder="请输入预设要求..."></textarea>
+          <div class="preset-editor-actions">
+            <button class="save-btn" id="presetSaveBtn"><i class="fas fa-save"></i> 保存预设</button>
+            <button class="delete-btn" id="presetDeleteBtn"><i class="fas fa-trash"></i> 删除</button>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="cancel-btn" id="presetCloseBtn"><i class="fas fa-times"></i> 关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 历史记录侧栏 -->
+  <div class="history-overlay" id="historyOverlay">
+    <div class="history-panel">
+      <div class="history-header">
+        <span class="history-title"><i class="fas fa-history" data-icon-key="historyTitle"></i> 历史记录</span>
+        <button class="history-clear-btn" id="historyClearBtn" title="清空全部"><i class="fas fa-trash"></i> 清空</button>
+        <button class="history-close-btn" id="historyCloseBtn" title="关闭"><i class="fas fa-times"></i></button>
+      </div>
+      <div class="history-list" id="historyList"></div>
+    </div>
+  </div>
+
+  <!-- ★ 左下角按钮组：图钉 + 主页 + 画布 + 对话 + 分镜表格 + APP工坊 -->
+  <div class="left-corner">
+    <button class="pin-btn" id="pinBtn" title="点击置顶/取消置顶"><i class="fas fa-thumbtack" data-icon-key="pin"></i></button>
+
+    <button class="mode-switch" id="homeSwitchBtn" title="切换到主页">
+      <i class="fas fa-home"></i> 主页
+    </button>
+
+    <button class="mode-switch" id="modeSwitch" title="切换到画布模式">
+      <i class="fas fa-project-diagram"></i> 画布
+    </button>
+
+    <button class="mode-switch" id="chatSwitchBtn" title="切换到对话模式">
+      <i class="fas fa-comment-dots"></i> 对话
+    </button>
+
+    <button class="mode-switch" id="storyboardSwitchBtn" title="分镜表格">
+      <i class="fas fa-table-cells"></i> 分镜表格
+    </button>
+
+    <button class="mode-switch" id="appWorkshopSwitchBtn" title="APP 工坊">
+      <i class="fas fa-toolbox"></i> APP工坊
+    </button>
+
+    <button class="mode-switch" id="agentSwitchBtn" title="Agent">
+      <i class="fas fa-robot"></i> Agent
+    </button>
+
+  </div>
+
+
+
+  <!-- 右下角时间 -->
+  <div class="time-display">
+    <span class="changelog-btn" id="changelogBtn">更新日志</span>
+    <span class="changelog-btn" id="updateBtn" title="检查是否有新版本">检查更新</span>
+    <i class="fas fa-clock" data-icon-key="clock"></i>
+    <div class="time-text">
+      <div class="time-date" id="timeDate">--月--日 周--</div>
+      <div class="time-clock" id="timeClock">--:--:--</div>
+    </div>
+  </div>
+  <!-- ★ 更新日志弹窗 -->
+  <div class="modal-overlay" id="changelogModal">
+    <div class="modal glass-modal changelog-modal">
+      <div class="modal-header">
+        <h2><i class="fas fa-file-lines"></i> 更新日志</h2>
+      </div>
+      <div class="changelog-body" id="changelogBody">加载中...</div>
+      <div class="modal-footer">
+        <button class="cancel-btn" id="changelogClose"><i class="fas fa-times"></i> 关闭</button>
+      </div>
+    </div>
+  </div>
+  <!-- ★ 检查更新弹窗 -->
+  <div class="modal-overlay" id="updateModal">
+    <div class="modal glass-modal changelog-modal">
+      <div class="modal-header">
+        <h2><i class="fas fa-cloud-arrow-down"></i> 检查更新</h2>
+      </div>
+      <div class="changelog-body" id="updateBody">正在检查...</div>
+      <div class="modal-footer">
+        <button class="cancel-btn" id="updateAction" style="display:none;">立即更新</button>
+        <button class="cancel-btn" id="updateClose"><i class="fas fa-times"></i> 关闭</button>
+      </div>
+    </div>
+  </div>
+  <!-- ★ 关闭确认弹窗 -->
+  <div class="modal-overlay" id="closeConfirmModal">
+    <div class="modal glass-modal close-confirm-modal">
+      <div class="modal-header">
+        <h2><i class="fas fa-power-off"></i></h2>
+      </div>
+
+      <div class="close-confirm-body">
+        <p>确定要关闭 Ember 吗？</p>
+      </div>
+      <div class="modal-footer">
+        <button class="cancel-btn" id="closeConfirmCancel"><i class="fas fa-times"></i> 取消</button>
+        <button class="save-btn" id="closeConfirmOk"><i class="fas fa-check"></i> 确定关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ★ 通用确认/提示弹窗（应用内样式） -->
+  <div class="modal-overlay" id="confirmModal">
+    <div class="modal glass-modal close-confirm-modal">
+      <div class="modal-header">
+        <h2><i class="fas fa-circle-question" id="confirmIcon"></i></h2>
+      </div>
+      <div class="close-confirm-body">
+        <p id="confirmMessage"></p>
+      </div>
+      <div class="modal-footer">
+        <button class="cancel-btn" id="confirmCancel"><i class="fas fa-times"></i> 取消</button>
+        <button class="save-btn" id="confirmOk"><i class="fas fa-check"></i> 确定</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 提示气泡 -->
+  <div id="toast" class="toast"></div>
+
+  <!-- ★ 右侧吸附标签（贴边时显示） -->
+  <div class="dock-tab" id="dockTab" title="鼠标移入展开，移开 2 秒缩回">
+    <img src="image/Ember_Logo.png" alt="Ember">
+  </div>
+
+  <!-- ★ 画布节点模式 -->
+  <style>
+    .canvas-add-btns { display: flex; align-items: center; gap: 6px; margin-left: 14px; }
+    .canvas-add-btn {
+      display: inline-flex; align-items: center; gap: 5px;
+      padding: 5px 10px; border: 1px solid rgba(255,255,255,0.16);
+      border-radius: 6px; background: rgba(255,255,255,0.07);
+      color: #cdd4e4; font-size: 12px; line-height: 1; cursor: pointer;
+      transition: background 0.15s, border-color 0.15s;
+    }
+    .canvas-add-btn:hover { background: rgba(255,255,255,0.16); border-color: rgba(255,255,255,0.3); }
+  </style>
+
+  <div class="canvas-mode" id="canvasMode">
+
+    <div class="canvas-toolbar">
+      <img src="image/Ember_Logo.png" class="toolbar-logo" alt="Ember">
+      <span class="canvas-title"><i class="fas fa-project-diagram"></i> 节点画布</span>
+
+      <span class="canvas-tips">双击 / 空格 / 右键创建节点 · Ctrl+滚轮缩放 · 中键拖动画布 · Alt+左键拖拽复制</span>
+
+
+      <button class="canvas-settings-btn" id="canvasSettingsBtn"><i class="fas fa-cog"></i> 设置</button>
+
+      <!-- 窗口控制（与主页面一致） -->
+      <div class="canvas-win-controls">
+        <button class="canvas-win-btn" id="canvasDockBtn" title="吸附到右侧"><i class="fas fa-arrow-right-to-bracket"></i></button>
+        <button class="canvas-win-btn" id="canvasWinMinBtn" title="最小化"><i class="fas fa-minus"></i></button>
+        <button class="canvas-win-btn" id="canvasWinMaxBtn" title="最大化"><i class="fas fa-square"></i></button>
+        <button class="canvas-win-btn canvas-win-close" id="canvasWinCloseBtn" title="关闭"><i class="fas fa-times"></i></button>
+      </div>
+    </div>
+    <div class="canvas-container" id="canvasContainer">
+      <div class="canvas-board-bar">
+        <select id="canvasBoardSelect" class="canvas-board-select" title="切换画布"></select>
+        <button class="canvas-board-btn" id="canvasBoardRenameBtn" title="重命名当前画布"><i class="fas fa-pen"></i></button>
+        <button class="canvas-board-btn" id="canvasBoardNewBtn" title="新建画布"><i class="fas fa-plus"></i></button>
+      </div>
+      <div class="canvas-world" id="canvasWorld">
+        <svg class="canvas-svg" id="canvasSvg"></svg>
+        <div class="canvas-nodes" id="canvasNodes"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ★ 对话模式 -->
+  <div class="chat-mode" id="chatMode">
+    <div class="chat-toolbar">
+      <img src="image/Ember_Logo.png" class="toolbar-logo" alt="Ember">
+      <span class="chat-title"><i class="fas fa-comment-dots"></i> 对话模式</span>
+      <span class="model-select-label">模型选择 -</span>           
+      <select id="chatModelSelect" class="chat-model-select" title="选择模型"></select>
+      <span class="chat-status-dot" id="chatStatusDot" title="模型状态"></span>
+      <button class="chat-clear-btn" id="chatClearBtn"><i class="fas fa-trash"></i> 清空</button>
+      <button class="chat-export-btn" id="chatExportBtn" title="导出对话记录"><i class="fas fa-download"></i> 导出</button>
+      <button class="chat-search-btn" id="chatSearchBtn" title="搜索对话记录"><i class="fas fa-search"></i></button>            
+      <button class="canvas-settings-btn" id="chatSettingsBtn"><i class="fas fa-cog"></i> 设置</button>
+      <div class="chat-win-controls">
+        <button class="canvas-win-btn" id="chatDockBtn" title="吸附到右侧"><i class="fas fa-arrow-right-to-bracket"></i></button>
+        <button class="canvas-win-btn" id="chatWinMinBtn" title="最小化"><i class="fas fa-minus"></i></button>
+        <button class="canvas-win-btn" id="chatWinMaxBtn" title="最大化"><i class="fas fa-square"></i></button>
+        <button class="canvas-win-btn canvas-win-close" id="chatWinCloseBtn" title="关闭"><i class="fas fa-times"></i></button>
+      </div>
+    </div>
+    <div class="chat-session-bar">
+      <button class="chat-new-btn" id="chatNewBtn" title="新建对话"><i class="fas fa-plus"></i> 新建对话</button>
+      <select id="chatSessionSelect" class="chat-session-select" title="切换对话"></select>
+      <button class="chat-session-del" id="chatSessionDel" title="删除当前对话"><i class="fas fa-trash"></i></button>
+    </div>
+    
+    <div class="chat-search-bar" id="chatSearchBar" style="display:none;">
+      <i class="fas fa-search"></i>
+      <input type="text" id="chatSearchInput" placeholder="搜索聊天记录...">
+      <span class="chat-search-count" id="chatSearchCount"></span>
+      <button class="chat-search-close" id="chatSearchClose" title="关闭搜索"><i class="fas fa-times"></i></button>
+    </div>
+    
+    <div class="chat-list" id="chatList"></div>
+    <div class="chat-input-area">
+      <div class="chat-img-preview" id="chatImgPreview"></div>
+      <textarea id="chatInput" placeholder="输入消息，Ctrl+Enter 发送；可拖入图片或代码文件（文件将作为附件发送）"></textarea>
+
+      <div class="chat-actions">
+        <button class="chat-send-btn" id="chatSendBtn"><i class="fas fa-paper-plane"></i> 发送<kbd class="kbd-hint">Ctrl ↵</kbd></button>
+
+        <button class="chat-stop-btn" id="chatStopBtn"><i class="fas fa-stop"></i> 停止</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ★ 分镜表格模式 -->
+  <div class="app-mode" id="storyboardMode">
+    <div class="canvas-toolbar">
+      <img src="image/Ember_Logo.png" class="toolbar-logo" alt="Ember">
+      <span class="canvas-title"><i class="fas fa-table-cells"></i> 分镜表格</span>
+      <span class="canvas-tips">输入剧本与描述，生成可直接使用的分镜表</span>
+      <span class="model-select-label">模型选择 -</span>
+      <select id="sbModelSelect" class="chat-model-select" title="选择模型"></select>
+      <span class="chat-status-dot" id="sbStatusDot" title="模型状态"></span>
+
+      <button class="canvas-settings-btn" id="sbExportBtn"><i class="fas fa-folder-open"></i> 导出项目</button>
+      <button class="canvas-settings-btn" id="sbSettingsBtn"><i class="fas fa-cog"></i> 设置</button>
+      <div class="canvas-win-controls">
+        <button class="canvas-win-btn" id="sbDockBtn" title="吸附到右侧"><i class="fas fa-arrow-right-to-bracket"></i></button>
+        <button class="canvas-win-btn" id="sbWinMinBtn" title="最小化"><i class="fas fa-minus"></i></button>
+        <button class="canvas-win-btn" id="sbWinMaxBtn" title="最大化"><i class="fas fa-square"></i></button>
+        <button class="canvas-win-btn canvas-win-close" id="sbWinCloseBtn" title="关闭"><i class="fas fa-times"></i></button>
+      </div>
+    </div>
+    <div class="app-mode-body">
+      <div class="app-mode-left">
+        <div class="sb-tabs">
+          <div class="sb-tab active" id="sbTabTable">制作分镜表</div>
+          <div class="sb-tab" id="sbTabImage">生成分镜图</div>
+        </div>
+
+        <!-- 标签1：制作分镜表 -->
+        <div class="sb-pane" id="sbPaneTable">
+          <label>剧本 / 内容</label>
+          <textarea id="sbScript" placeholder="把剧本或段落粘贴到这里..."></textarea>
+
+          <div class="sb-row">
+            <div>
+              <label>镜头数量</label>
+              <input type="number" id="sbShotCount" value="8" min="0" max="60" title="0 = 由 AI 根据内容决定">
+            </div>
+            <div>
+              <label>每镜时长（秒）</label>
+              <input type="number" id="sbDuration" value="5" min="0" max="60" title="0 = 由 AI 决定">
+            </div>
+            <div>
+              <label>总时长（秒）</label>
+              <input type="number" id="sbTotalDuration" value="0" min="0" max="3600" title="0 = 不限制">
+            </div>
+          </div>
+          <div class="sb-hint">数字填 0 表示由 AI 根据剧本自动决定</div>
+
+          <label>镜头语言（可选）</label>
+          <select id="sbExtraSelect"></select>
+          <label>额外要求（手动输入 · 可为空）</label>
+          <textarea id="sbExtra" class="sb-extra" placeholder="选上面的「手动输入」后在这里自己写；留空则不影响分镜表生成"></textarea>
+
+          <div class="ws-check-row">
+            <input type="checkbox" id="sbContinuity">
+            <span>镜头连续性</span>
+          </div>
+          <div class="ws-check-hint">开启后会先产出「设定表」（角色 / 场景 / 光线），分镜表与生图都按它对齐；手动改过会被当作固定设定沿用</div>
+
+          <label>设定表（角色 · 场景 · 光线）</label>
+          <textarea id="sbBible" class="sb-extra" placeholder="开启「镜头连续性」后自动生成；手动修改后会被当作固定设定沿用"></textarea>
+          <div style="display:flex;gap:8px;margin-top:6px;flex:0 0 auto;">
+            <button id="sbBibleRegen" style="flex:1;padding:6px 10px;border:1px solid var(--border-accent-strong);border-radius:8px;background:transparent;color:var(--text-soft);font-size:12px;cursor:pointer;font-family:inherit;">按剧本重算设定表</button>
+            <button id="sbBibleClear" style="padding:6px 10px;border:1px solid var(--card-border);border-radius:8px;background:transparent;color:var(--text-muted);font-size:12px;cursor:pointer;font-family:inherit;">清空</button>
+          </div>
+
+          <button class="sb-generate-btn" id="sbGenerateBtn"><i class="fas fa-wand-magic-sparkles"></i> 生成分镜表</button>
+          <div class="sb-status" id="sbStatus"></div>
+        </div>
+
+        <!-- 标签2：生成分镜图 -->
+        <div class="sb-pane" id="sbPaneImage" style="display:none;">
+          <label>补充风格（可选 · 所有镜头共用）</label>
+          <div class="ws-check-hint">只写风格与画质（胶片颗粒 / 体积光 / 景深 / 雨 / 边缘暗角 / 不要出现文字水印…）。<b>角色、场景、光线请在「设定表」里统一</b>，这里不要重复，避免和设定表打架。</div>
+          <textarea id="sbGlobalPrompt" class="sb-extra" placeholder="例如：胶片颗粒感，浅景深，边缘轻微暗角，不要出现文字与水印"></textarea>
+
+
+          <label>生图模型</label>
+          <select id="sbImageModel"></select>
+
+          <div class="sb-row">
+            <div>
+              <label>格子布局</label>
+              <select id="sbGridSize">
+                <option value="2" selected>2×2（4格）</option>
+                <option value="3">3×3（9格）</option>
+                <option value="4">4×4（16格）</option>
+              </select>
+            </div>
+            <div>
+              <label>大图尺寸</label>
+              <select id="sbImageSize"></select>
+            </div>
+          </div>
+          <div class="sb-hint" id="sbGridInfo">每格约 -- × --</div>
+
+          <label>画质风格</label>
+          <select id="sbImageStyle"></select>
+          <div class="ws-check-hint">选项来自「片段 / 画质风格」的标题；选中后其内容会自动用于生图提示词（界面上不显示内容）</div>
+
+
+
+          <div class="sb-row" id="sbQualityRow" style="display:none;">
+            <div>
+              <label>质量</label>
+              <select id="sbImageQuality">
+                <option value="low">低</option>
+                <option value="medium" selected>中</option>
+                <option value="high">高</option>
+              </select>
+            </div>
+          </div>
+
+          <button class="sb-generate-btn" id="sbGenImagesBtn"><i class="fas fa-image"></i> 生成分镜图片</button>
+          <div class="sb-status" id="sbImageStatus"></div>
+        </div>
+      </div>
+
+      <div class="app-mode-resizer" id="sbResizer"></div>
+
+      <div class="app-mode-right">
+        <div class="sb-table-wrap" id="sbTableWrap">
+          <div class="app-mode-empty">
+            <i class="fas fa-table-cells"></i>
+            <p>生成的分镜表会显示在这里</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ★ APP 工坊模式 -->
+  <div class="app-mode" id="workshopMode">
+    <div class="canvas-toolbar">
+      <img src="image/Ember_Logo.png" class="toolbar-logo" alt="Ember">
+      <span class="canvas-title"><i class="fas fa-toolbox"></i> APP 工坊</span>
+      <span class="canvas-tips">描述需求，生成可直接运行的文件</span>
+      <span class="model-select-label">模型选择 -</span>
+      <select id="wsModelSelect" class="chat-model-select" title="选择模型"></select>
+      <span class="chat-status-dot" id="wsStatusDot" title="模型状态"></span>
+      <button class="canvas-settings-btn" id="wsSettingsBtn"><i class="fas fa-cog"></i> 设置</button>
+
+      <div class="canvas-win-controls">
+        <button class="canvas-win-btn" id="wsDockBtn" title="吸附到右侧"><i class="fas fa-arrow-right-to-bracket"></i></button>
+        <button class="canvas-win-btn" id="wsWinMinBtn" title="最小化"><i class="fas fa-minus"></i></button>
+        <button class="canvas-win-btn" id="wsWinMaxBtn" title="最大化"><i class="fas fa-square"></i></button>
+        <button class="canvas-win-btn canvas-win-close" id="wsWinCloseBtn" title="关闭"><i class="fas fa-times"></i></button>
+      </div>
+    </div>
+    <div class="ws-project-bar">
+      <button class="chat-new-btn" id="wsProjectNewBtn" title="新建项目"><i class="fas fa-plus"></i> 新建项目</button>
+      <select id="wsProjectSelect" title="切换项目"></select>
+      <button class="chat-new-btn" id="wsProjectRenameBtn" title="重命名当前项目"><i class="fas fa-pen"></i></button>
+      <button class="chat-session-del" id="wsProjectDel" title="删除当前项目"><i class="fas fa-trash"></i></button>
+
+    </div>
+    <div class="app-mode-body">
+      <div class="app-mode-left">
+        <label>需求描述</label>
+
+        <textarea id="wsPrompt" placeholder="例如：做一个贪吃蛇小游戏，方向键控制，有计分和最高分记录"></textarea>
+
+        <label>参考图（可选，作用请在需求描述里说明）</label>
+        <div class="img-preview-bar" id="wsImgBar">
+          <div class="img-preview-empty">点击浏览 / 拖拽图片，或 Ctrl+V 粘贴</div>
+        </div>
+
+        <label>输出类型</label>
+
+        <select id="wsType">
+          <option value="html">HTML 单文件（可直接运行）</option>
+          <option value="js">JavaScript 文件</option>
+          <option value="python">Python 脚本</option>
+          <option value="css">CSS 样式表</option>
+        </select>
+
+        <div class="ws-check-row">
+          <input type="checkbox" id="wsPortable">
+          <span>直接构建单个 exe</span>
+
+        </div>
+        <div class="ws-check-hint">勾选后直接构建出单个 exe；不勾选只生成可打包的项目。首次构建需联网下载依赖（electron-builder + Electron 运行时，约 150MB），视网速约 3～10 分钟，请耐心等待。</div>
+
+        <label>应用图标</label>
+        <div class="ws-icon-row">
+          <div class="ws-icon-current" id="wsIconCurrent" title="点击更换图标"></div>
+          <button class="ws-icon-pick" id="wsIconBtn"><i class="fas fa-sync-alt"></i> 更换</button>
+        </div>
+
+
+        <label>补充要求（可选）</label>
+        <textarea id="wsExtra" class="sb-extra" placeholder="例如：界面用暗色主题 / 代码加中文注释 / 不要依赖外部库"></textarea>
+
+        <button class="sb-generate-btn" id="wsGenerateBtn"><i class="fas fa-wand-magic-sparkles"></i> 生成文件</button>
+        <div class="sb-status" id="wsStatus"></div>
+
+        <div class="sb-sep"></div>
+        <div class="sb-section-title"><i class="fas fa-rotate"></i> 迭代修改</div>
+        <label>修改意见</label>
+        <textarea id="wsRevise" class="sb-extra" placeholder="例如：把背景改成深蓝色，分数用大字显示，增加暂停功能"></textarea>
+        <button class="sb-generate-btn" id="wsReviseBtn"><i class="fas fa-wand-magic-sparkles"></i> 应用修改</button>
+        <div class="sb-status" id="wsReviseStatus"></div>
+      </div>
+
+      <div class="app-mode-resizer" id="wsResizer"></div>
+
+      <div class="app-mode-right">
+        <pre class="ws-code" id="wsCode">生成的可运行代码会显示在这里</pre>
+        <div class="ws-actions">
+          <button class="primary" id="wsRunBtn"><i class="fas fa-play"></i> 运行预览</button>
+          <button id="wsRollbackBtn" title="回溯到上一版本"><i class="fas fa-undo"></i> 回溯上一版本</button>
+          <button id="wsCopyBtn"><i class="far fa-copy"></i> 复制代码</button>
+
+          <button id="wsSaveBtn"><i class="fas fa-save"></i> 保存为文件</button>
+          <button id="wsPackBtn"><i class="fas fa-box-open"></i> 打包为应用</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+
+
+  <!-- ★ Agent 模式 -->
+  <div class="app-mode" id="agentMode">
+    <div class="canvas-toolbar">
+      <img src="image/Ember_Logo.png" class="toolbar-logo" alt="Ember">
+      <span class="canvas-title"><i class="fas fa-robot"></i> Agent</span>
+      <span class="canvas-tips">选择工作文件夹，让 AI 自主读写文件</span>
+      <span class="model-select-label">模型选择 -</span>
+      <select id="agModelSelect" class="chat-model-select" title="选择模型"></select>
+      <span class="chat-status-dot" id="agStatusDot" title="模型状态"></span>
+      <button class="canvas-settings-btn" id="agSettingsBtn"><i class="fas fa-cog"></i> 设置</button>
+      <button class="canvas-settings-btn" id="agClearChatBtn" title="清空对话"><i class="fas fa-broom"></i> 清空对话</button>
+      <div class="canvas-win-controls">
+        <button class="canvas-win-btn" id="agDockBtn" title="吸附到右侧"><i class="fas fa-arrow-right-to-bracket"></i></button>
+        <button class="canvas-win-btn" id="agWinMinBtn" title="最小化"><i class="fas fa-minus"></i></button>
+        <button class="canvas-win-btn" id="agWinMaxBtn" title="最大化"><i class="fas fa-square"></i></button>
+        <button class="canvas-win-btn canvas-win-close" id="agWinCloseBtn" title="关闭"><i class="fas fa-times"></i></button>
+      </div>
+    </div>
+    <div class="ag-layout">
+      <div class="ag-left">
+        <div class="ag-panel-title"><i class="fas fa-folder-open"></i> 工作文件夹
+          <button class="chat-new-btn" id="agAddFolderBtn" title="添加文件夹"><i class="fas fa-plus"></i> 添加</button>
+        </div>
+        <div class="ag-roots" id="agRootsList"></div>
+        <div class="ag-tree" id="agTree"></div>
+        <div class="ag-tree-empty" id="agTreeEmpty">还没有工作文件夹，点「添加」选择一个或多个</div>
+      </div>
+      <div class="ag-right">
+        <div class="ag-preset-row">
+          <span class="ag-preset-label"><i class="fas fa-book-open"></i> Agent预设：</span>
+          <select id="agPresetSelect" class="ag-preset-select" title="选择要生效的预设说明书"></select>
+          <button class="chat-new-btn" id="agPresetManageBtn" title="管理预设"><i class="fas fa-cog"></i> 管理</button>
+        </div>
+        <div class="ag-chat" id="agChat">
+          <div class="ag-chat-empty" id="agChatEmpty">
+            <i class="fas fa-robot"></i>
+            <p>选择文件夹后，用自然语言描述任务。<br>Agent 会在这里对话，并对文件提出可确认的修改。</p>
+          </div>
+        </div>
+        <div class="ag-diff-panel" id="agDiffPanel" style="display:none;">
+          <div class="ag-diff-title"><i class="fas fa-code-compare"></i> 待确认的更改 <span class="ag-diff-count" id="agDiffCount"></span>
+            <span class="ag-diff-actions">
+              <button class="save-btn" id="agApplyBtn"><i class="fas fa-check"></i> 应用选中</button>
+              <button class="cancel-btn" id="agClearDiffBtn"><i class="fas fa-times"></i> 清空</button>
+            </span>
+          </div>
+          <div class="ag-diff-list" id="agDiffList"></div>
+        </div>
+        <div class="ag-input-area">
+          <div class="sb-status" id="agStatus"></div>
+          <div class="ag-input-row">
+            <textarea id="agInput" placeholder="输入任务或对话…  Enter 发送，Shift+Enter 换行"></textarea>
+            <button class="ag-send-btn" id="agSendBtn" title="发送"><i class="fas fa-paper-plane"></i></button>
+            <button class="ag-stop-btn" id="agStopBtn" title="停止" style="display:none;"><i class="fas fa-stop"></i></button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Agent 文件预览弹窗 -->
+  <div class="modal-overlay" id="agPreviewOverlay">
+    <div class="glass-modal ws-rename-modal ag-preview-modal">
+      <div class="modal-header">
+        <h2><i class="fas fa-file-lines"></i> <span id="agPreviewName"></span></h2>
+      </div>
+      <div class="modal-body">
+        <div class="ag-preview-body" id="agPreviewBody"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="cancel-btn" id="agPreviewReveal"><i class="fas fa-folder-open"></i> 在文件夹中显示</button>
+        <button class="cancel-btn" id="agPreviewClose"><i class="fas fa-times"></i> 关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Agent 预设管理弹窗 -->
+  <div class="modal-overlay" id="agPresetOverlay">
+    <div class="glass-modal ws-rename-modal ag-preset-modal">
+      <div class="modal-header">
+        <h2><i class="fas fa-book-open"></i> 管理 Agent 预设</h2>
+      </div>
+      <div class="modal-body">
+        <div class="ag-preset-list" id="agPresetList"></div>
+        <div class="ag-preset-form" id="agPresetForm" style="display:none;">
+          <label>名称</label>
+          <input type="text" id="agPresetName" maxlength="20" placeholder="预设名称">
+          <label>说明书内容（约 200 字，每轮会随请求发给模型）</label>
+          <textarea id="agPresetContent" rows="6" placeholder="在这里填写工作说明书内容…"></textarea>
+          <div class="ag-preset-form-actions">
+            <button class="save-btn" id="agPresetSave"><i class="fas fa-check"></i> 保存</button>
+            <button class="cancel-btn" id="agPresetCancel"><i class="fas fa-times"></i> 取消</button>
+          </div>
+        </div>
+        <button class="chat-new-btn ag-preset-add" id="agPresetAddBtn"><i class="fas fa-plus"></i> 新建预设</button>
+      </div>
+      <div class="modal-footer">
+        <button class="cancel-btn" id="agPresetClose"><i class="fas fa-times"></i> 关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 应用图标选择弹窗 -->
+
+  <div class="modal-overlay" id="iconPickerOverlay">
+    <div class="glass-modal icon-modal">
+      <div class="modal-header">
+        <h2><i class="fas fa-image"></i> 选择应用图标</h2>
+        <span class="modal-subtitle">打包 exe 时使用的图标</span>
+      </div>
+      <div class="modal-body icon-modal-body">
+        <div class="icon-tabs">
+          <button class="icon-tab active" data-tab="builtin"><i class="fas fa-th-large"></i> 自带图标</button>
+          <button class="icon-tab" data-tab="upload"><i class="fas fa-upload"></i> 上传图标</button>
+        </div>
+        <div class="icon-pane" id="iconBuiltinPane">
+          <div class="icon-grid" id="iconGrid"></div>
+        </div>
+        <div class="icon-pane" id="iconUploadPane" style="display:none;">
+          <button class="icon-upload-btn" id="iconUploadBtn"><i class="fas fa-plus"></i> 选择图片上传</button>
+          <div class="icon-upload-hint">规格：正方形，256×256 像素以上，.png 或 .ico，背景透明最佳</div>
+          <div class="icon-grid" id="iconUploadGrid"></div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="cancel-btn" id="iconPickerCancel"><i class="fas fa-times"></i> 取消</button>
+        <button class="save-btn" id="iconPickerConfirm"><i class="fas fa-check"></i> 确定</button>
+      </div>
+
+    </div>
+  </div>
+
+
+
+
+  <!-- 项目重命名弹窗 -->
+
+
+  <div class="modal-overlay" id="wsRenameOverlay">
+    <div class="glass-modal ws-rename-modal">
+      <div class="modal-header">
+        <h2><i class="fas fa-pen"></i> 重命名项目</h2>
+      </div>
+      <div class="modal-body">
+        <input type="text" id="wsRenameInput" class="ws-rename-input" placeholder="输入项目名称">
+      </div>
+      <div class="modal-footer">
+        <button class="cancel-btn" id="wsRenameCancel"><i class="fas fa-times"></i> 取消</button>
+        <button class="save-btn" id="wsRenameConfirm"><i class="fas fa-check"></i> 确定</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ★ 右键创建菜单 -->
+
+  <div class="canvas-ctx" id="canvasCtxMenu">
+    <div class="canvas-ctx-item" id="ctxAddText"><i class="fas fa-font"></i> 文本节点</div>
+    <div class="canvas-ctx-item" id="ctxAddPreset"><i class="fas fa-cog"></i> 预设节点</div>
+    <div class="canvas-ctx-item" id="ctxAddOutput"><i class="fas fa-lightbulb"></i> LLM 输出节点</div>
+    <div class="canvas-ctx-item" id="ctxAddImage"><i class="fas fa-image"></i> 图片节点</div>
+    <div class="canvas-ctx-item" id="ctxAddGen"><i class="fas fa-magic"></i> 生图节点</div>
+    <div class="canvas-ctx-item" id="ctxAddBless"><i class="fas fa-hands-praying"></i> 加持节点</div>
+  </div>
+
+  <!-- ★ 画布改名弹窗 -->
+  <div class="modal-overlay" id="canvasBoardRenameOverlay">
+    <div class="glass-modal ws-rename-modal">
+      <div class="modal-header">
+        <h2><i class="fas fa-pen"></i> 重命名画布</h2>
+      </div>
+      <div class="modal-body">
+        <input type="text" id="canvasBoardRenameInput" class="ws-rename-input" placeholder="输入画布名称">
+      </div>
+      <div class="modal-footer">
+        <button class="cancel-btn" id="canvasBoardRenameCancel"><i class="fas fa-times"></i> 取消</button>
+        <button class="save-btn" id="canvasBoardRenameConfirm"><i class="fas fa-check"></i> 确定</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="js/marked.min.js"></script>
+  <script src="js/title-mode.js"></script>
+  <script src="js/presets.js"></script>
+  <!-- ★ canvas-mode.js 放在 app.js 前面，独立运行 -->
+  <script src="js/canvas-mode.js"></script>
+  <script src="js/app.js"></script>
+  <script src="js/chat-mode.js"></script>
+  <script src="js/storyboard-mode.js"></script>
+  <script src="js/app-workshop.js"></script>
+  <script src="js/agent-mode.js"></script>
+
+  <script src="js/prompt-snippets.js"></script>
+
+
+</body>
+</html>
