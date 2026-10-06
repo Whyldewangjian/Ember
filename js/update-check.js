@@ -23,10 +23,10 @@ const https = require('https');
 const http = require('http');
 const { spawn } = require('child_process');
 
-// ===== ★★★ 这里必须改成你自己的 GitHub 仓库 ★★★ =====
-const GITHUB_OWNER = 'YOUR_GITHUB_USERNAME';
+// ===== 你的 GitHub 仓库 =====
+const GITHUB_OWNER = 'Whyldewangjian';
 const GITHUB_REPO = 'Ember';
-// =====================================================
+// ===========================
 
 const API_LATEST = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/releases/latest`;
 const UA = 'Ember-Updater';
