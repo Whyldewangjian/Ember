@@ -30,7 +30,17 @@ const GITHUB_REPO = 'Ember';
 
 const API_LATEST = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/releases/latest`;
 const UA = 'Ember-Updater';
-const DOWNLOAD_HOSTS = ['github.com', 'objects.githubusercontent.com', 'api.github.com'];
+
+// 允许下载的域名后缀。
+// GitHub 的 Release 附件会 302 重定向到不同的资产域名，常见的有：
+//   github.com（下载入口）
+//   objects.githubusercontent.com（旧版资产域名 / release-assets 同族）
+//   release-assets.githubusercontent.com（新版带 digest 的资产域名）
+// 所以用后缀匹配，而不是精确匹配单个主机名。
+const DOWNLOAD_HOST_SUFFIXES = [
+  '.github.com',
+  '.githubusercontent.com'
+];
 
 // ---------------------------------------------------------------- 工具函数
 
@@ -117,7 +127,10 @@ function assetUrlAllowed(url) {
   try {
     const u = new URL(url);
     if (u.protocol !== 'https:') return false;
-    return DOWNLOAD_HOSTS.indexOf(u.hostname) >= 0;
+    const host = u.hostname.toLowerCase();
+    return DOWNLOAD_HOST_SUFFIXES.some(function (suffix) {
+      return host === suffix.slice(1) || host.endsWith(suffix);
+    });
   } catch (e) { return false; }
 }
 
