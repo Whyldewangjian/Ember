@@ -121,6 +121,93 @@ function registerBrowserIPC() {
     return true;
   });
 
+  // ★ Agent 预览专用：读取 HTML，并把相对引用的本地 js/css 内联进去
+  //
+  // 为什么需要这个：
+  //   Agent 的预览用的是 iframe.srcdoc，且没有 allow-same-origin，
+  //   处于"不透明源"状态。这种 iframe 里 <script src="./game.js"> 这类
+  //   相对路径请求会被拦掉，导致 HTML 里的画面能显示、但脚本不执行。
+  //   把本地 js/css 直接内联成 <script>...</script> / <style>...</style>，
+  //   预览就完整了。外链（http/https//data:）保持原样不动。
+  ipcMain.handle('agent-read-file-inline', async (event, p) => {
+    try {
+      const fs = require('fs');
+      const np = path.resolve(String(p || ''));
+      if (!fs.existsSync(np)) return { ok: false, error: '文件不存在' };
+
+      const st = fs.statSync(np);
+      if (st.isDirectory()) return { ok: false, error: '这是一个文件夹' };
+
+      const buf = fs.readFileSync(np);
+      const head = buf.slice(0, 8000);
+      for (let i = 0; i < head.length; i++) {
+        if (head[i] === 0) return { ok: true, binary: true, size: st.size, content: '' };
+      }
+
+      let content = buf.toString('utf-8');
+      if (!/\.html?$/i.test(np)) {
+        return { ok: true, binary: false, size: st.size, content: content, inlined: 0 };
+      }
+
+      const root = path.dirname(np);
+      let inlinedCount = 0;
+      const skipped = [];
+
+      // 安全的相对路径解析：不允许跳出 HTML 所在目录之外太远（允许子目录）
+      function resolveLocal(ref) {
+        const clean = String(ref).split('?')[0].split('#')[0].trim();
+        if (!clean) return null;
+        if (/^(https?:|data:|blob:|mailto:|javascript:|#)/i.test(clean)) return null;
+        const abs = path.resolve(root, clean.replace(/^\.\//, ''));
+        // 只允许读取 root 之下的文件
+        const rel = path.relative(root, abs);
+        if (rel.startsWith('..') || path.isAbsolute(rel)) return null;
+        return abs;
+      }
+
+      // 内联 <script src="..."></script>
+      content = content.replace(/<script\b([^>]*?)\bsrc\s*=\s*["']([^"']+)["']([^>]*)>\s*<\/script>/gi,
+        function (m, pre, src, post) {
+          const abs = resolveLocal(src);
+          if (!abs) return m;
+          try {
+            if (!fs.existsSync(abs)) { skipped.push(src); return m; }
+            const code = fs.readFileSync(abs, 'utf-8');
+            inlinedCount++;
+            // 防止脚本内容里出现 </script> 提前闭合标签
+            const safe = code.replace(/<\/script>/gi, '<\\/script>');
+            return '<script' + pre + post + '>\n' + safe + '\n</script>';
+          } catch (e) { skipped.push(src); return m; }
+        });
+
+      // 内联 <link rel="stylesheet" href="...">
+      content = content.replace(/<link\b([^>]*?)\bhref\s*=\s*["']([^"']+)["']([^>]*?)\/?>/gi,
+        function (m, pre, href, post) {
+          const isCss = /rel\s*=\s*["']?stylesheet/i.test(pre + post);
+          if (!isCss) return m;
+          const abs = resolveLocal(href);
+          if (!abs) return m;
+          try {
+            if (!fs.existsSync(abs)) { skipped.push(href); return m; }
+            const css = fs.readFileSync(abs, 'utf-8');
+            inlinedCount++;
+            return '<style>\n' + css + '\n</style>';
+          } catch (e) { skipped.push(href); return m; }
+        });
+
+      return {
+        ok: true,
+        binary: false,
+        size: st.size,
+        content: content,
+        inlined: inlinedCount,
+        skipped: skipped.slice(0, 10)
+      };
+    } catch (e) {
+      return { ok: false, error: (e && e.message) ? e.message : String(e) };
+    }
+  });
+
   // ★ APP工坊：预览生成的 HTML（写临时文件后用浏览页打开）
   ipcMain.handle('preview-html', async (event, html) => {
     try {
@@ -131,6 +218,11 @@ function registerBrowserIPC() {
       const url = 'file:///' + file.replace(/\\/g, '/');
 
       // ★ 已有预览窗口 → 只刷新内容，不新建（这是"越点越卡"的根治）
+      //
+      // ★ 注意：这里必须用 loadFile 而不是 loadURL('file://...?t=时间戳')。
+      //   Chromium 对 file:// 协议的查询字符串处理不规范，同一个文件路径
+      //   即使 ?t= 变化也可能命中同一份缓存，导致预览一直显示上一次的旧内容。
+      //   loadFile 是 Electron 原生的文件加载方式，每次都会重新读取磁盘。
       if (previewWin && !previewWin.isDestroyed()) {
         try {
           previewWin.show();
@@ -138,7 +230,7 @@ function registerBrowserIPC() {
           const view = previewWin._browserView;
           const wc = view && view.webContents;
           if (wc && !wc.isDestroyed()) {
-            wc.loadURL(url + '?t=' + Date.now());   // 加时间戳绕过缓存，确保读到新内容
+            wc.loadFile(file);
           }
         } catch (e) {}
         return { ok: true, url: url, reused: true };

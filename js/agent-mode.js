@@ -75,6 +75,8 @@
     renderPresetSelect();
     loadRoots();
     renderRoots();          // ★ 必须重绘：否则从 localStorage 读回的文件夹不会出现在列表里
+    loadHistory();          // ★ 读回上次的对话
+    renderHistory();        // ★ 并把气泡重画出来
     refreshList();
     if (typeof checkApiStatus === 'function') checkApiStatus('agent');
   }
@@ -272,6 +274,7 @@
   }
   function clearChat() {
     history = [];
+    clearHistoryStorage();   // ★ 连 localStorage 一起清，否则下次打开又会冒出来
     proposals = [];
     if (agChat) agChat.innerHTML = '';
     if (agChatEmpty) agChatEmpty.style.display = '';
@@ -400,6 +403,55 @@
   if (agPresetCancel) agPresetCancel.addEventListener('click', closePresetForm);
   if (agPresetClose) agPresetClose.addEventListener('click', function () { if (agPresetOverlay) agPresetOverlay.style.display = 'none'; });
   if (agPresetOverlay) agPresetOverlay.addEventListener('click', function (e) { if (e.target === agPresetOverlay) agPresetOverlay.style.display = 'none'; });
+
+  // ---------- 对话历史持久化 ----------
+  // ★ 之前 history 只存在内存里，关掉程序就全丢。这里补上 localStorage 持久化。
+  const AGENT_HISTORY_KEY = 'llm_agent_history';
+  const AGENT_HISTORY_MAX = 200;   // 最多保留多少条消息（防止 localStorage 塞爆）
+
+  function saveHistory() {
+    try {
+      const trimmed = history.length > AGENT_HISTORY_MAX
+        ? history.slice(history.length - AGENT_HISTORY_MAX)
+        : history;
+      localStorage.setItem(AGENT_HISTORY_KEY, JSON.stringify(trimmed));
+    } catch (e) {}
+  }
+  function loadHistory() {
+    try {
+      const s = localStorage.getItem(AGENT_HISTORY_KEY);
+      if (!s) return;
+      const arr = JSON.parse(s);
+      if (Array.isArray(arr)) {
+        history = arr.filter(function (m) {
+          return m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string';
+        });
+      }
+    } catch (e) { history = []; }
+  }
+  function clearHistoryStorage() {
+    try { localStorage.removeItem(AGENT_HISTORY_KEY); } catch (e) {}
+  }
+
+  // ★ 把持久化的历史重新画回界面
+  //   之前 history 只在内存里，界面气泡也在内存里，两者都随程序关闭一起消失。
+  //   现在启动时把 history 读回来，再逐条重建气泡。
+  function renderHistory() {
+    if (!agChat) return;
+    agChat.innerHTML = '';
+    if (!history.length) { updateChatEmpty(); return; }
+    history.forEach(function (m) {
+      if (!m || typeof m.content !== 'string') return;
+      if (m.role === 'user') {
+        addUserBubble(m.content);
+      } else if (m.role === 'assistant') {
+        const b = addAgentBubble();
+        setBubbleText(b, m.content);
+      }
+    });
+    updateChatEmpty();
+    scrollChat();
+  }
 
   // ---------- 文件夹管理 ----------
   function saveRoots() {
@@ -584,7 +636,13 @@
   async function previewFile(abs) {
     if (!ipc || !agPreviewOverlay) return;
     previewAbs = abs;
-    const r = await ipc.invoke('agent-read-file', abs);
+    // ★ HTML 用「内联版」读取：把相对引用的本地 js/css 直接嵌进内容里。
+    //   因为预览用的 iframe.srcdoc 是不透明源，<script src="./xxx.js"> 这类
+    //   相对路径请求会被拦掉，导致画面显示但脚本不执行。
+    //   其他类型仍走普通读取。
+    const ext = extOf(abs);
+    const isHtml = (ext === 'html' || ext === 'htm');
+    const r = await ipc.invoke(isHtml ? 'agent-read-file-inline' : 'agent-read-file', abs);
     if (agPreviewName) agPreviewName.textContent = relOf(abs) || abs;
     const body = agPreviewBody;
     if (body) {
@@ -592,13 +650,17 @@
       if (!r || !r.ok) body.appendChild(makePreviewPre('读取失败：' + ((r && r.error) || '未知错误')));
       else if (r.binary) body.appendChild(makePreviewPre('[二进制文件，大小 ' + fmtSize(r.size) + ']'));
       else {
-        const ext = extOf(abs);
-        if (ext === 'html' || ext === 'htm') {
+        if (isHtml) {
           const ifr = document.createElement('iframe');
           ifr.className = 'ag-preview-iframe';
-          ifr.setAttribute('sandbox', 'allow-scripts allow-modals');
+          // 加 allow-same-origin 让内联脚本能正常读写自身 localStorage；
+          // 内容已是自包含的，不需要再请求外部文件。
+          ifr.setAttribute('sandbox', 'allow-scripts allow-modals allow-same-origin');
           ifr.srcdoc = r.content;
           body.appendChild(ifr);
+          if (r.skipped && r.skipped.length) {
+            body.appendChild(makePreviewPre('（以下本地引用未能内联：' + r.skipped.join('、') + '）'));
+          }
         } else if (ext === 'csv') {
           body.appendChild(makeCsvTable(r.content));
         } else {
@@ -1099,6 +1161,7 @@
     //   工具调用与文件内容属于本轮临时上下文，不进入历史，避免撑爆上下文导致后续答非所问
     history.push({ role: 'user', content: text });
     history.push({ role: 'assistant', content: (finalText || '（本轮未给出文字总结）').trim() });
+    saveHistory();   // ★ 写入 localStorage，下次打开还在
     running = false;
     agSendBtn.disabled = false;
     agStopBtn.style.display = 'none';
