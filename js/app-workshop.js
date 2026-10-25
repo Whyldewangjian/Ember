@@ -526,7 +526,9 @@
       codeScrollPending = false;
       if (!codeEl) return;
       if (codeBuf) { codeEl.appendChild(document.createTextNode(codeBuf)); codeBuf = ''; }
-      codeEl.scrollTop = codeEl.scrollHeight;
+      // ★ 用户上滚查看时不再强制拉到底部
+      if (window.emberStick) window.emberStick.follow(codeEl);
+      else codeEl.scrollTop = codeEl.scrollHeight;
     });
   }
   // ★ 流式内容先攒进缓冲区，每帧只写一次 DOM
@@ -613,6 +615,13 @@
       );
     }
 
+    // ★ 小游戏需求：附上完整游戏规范（含画面档位 + 画面密度 + 骨架）
+    //   工坊只做单文件预览，所以强制 multi:false
+    if (type === 'html' && typeof EmberGame !== 'undefined' && EmberGame.isGame(need)) {
+      const spec = EmberGame.gameSpec(need, { multi: false });
+      lines.push('', spec);
+    }
+
     lines.push('', '【需求】', need);
     return lines.join('\n');
   }
@@ -654,6 +663,8 @@
     generating = true;
     genBtn.disabled = true;
     setStatus('生成中...'); if (codeEl) codeEl.textContent = '正在生成代码...';
+    // ★ 新一轮：重新吸附到底部
+    if (window.emberStick && codeEl) window.emberStick.reset(codeEl);
     wsPrevCode = generatedCode;
     generatedCode = '';
 
@@ -671,6 +682,10 @@
       }, wsImages);
 
       generatedCode = extractCode(lastFull);
+      // ★ 生成后纠正：模型常把 Phaser 写成写死的 CDN 地址 → 统一改成「本地优先 + 回退链」
+      if (generatedCode && typeof EmberGame !== 'undefined' && EmberGame.normalize) {
+        generatedCode = EmberGame.normalize(generatedCode);
+      }
       setRollbackBtn(false);
 
       codeEl.textContent = generatedCode || '（未提取到代码，请重试）';
@@ -719,10 +734,12 @@
           setReviseStatus('❌ 未提取到代码，已保留上一版');
         } else {
           wsPrevCode = prevCode;
-          generatedCode = newCode;
+          // ★ 迭代修改后也纠正一次（防止模型改代码时又写回 CDN 直链）
+          generatedCode = (typeof EmberGame !== 'undefined' && EmberGame.normalize)
+            ? EmberGame.normalize(newCode) : newCode;
           setRollbackBtn(false);
 
-          codeEl.textContent = newCode;
+          codeEl.textContent = generatedCode;
 
           if (reviseInput) reviseInput.value = '';
           setReviseStatus('✅ 修改完成（' + newCode.length + ' 字），可继续提意见或直接运行'); showWsMeta(wsT0, wsT1, wsPrompt, newCode);
@@ -890,6 +907,80 @@ contextBridge.exposeInMainWorld('emberWin', {
 
   const CODE_PLACEHOLDER = '生成的可运行代码会显示在这里';
 
+  // ---------- 代码搜索（滚到匹配位置，不改 DOM，不会破坏代码显示） ----------
+  (function initCodeFind() {
+    const findInput = document.getElementById('wsFindInput');
+    const findCount = document.getElementById('wsFindCount');
+    const btnPrev = document.getElementById('wsFindPrev');
+    const btnNext = document.getElementById('wsFindNext');
+    if (!findInput || !findCount) return;
+    let findIdx = -1;
+
+    function query() { return (findInput.value || '').trim(); }
+
+    function hits() {
+      const q = query();
+      const text = (codeEl && codeEl.textContent) || '';
+      if (!q) return [];
+      const out = [];
+      let i = text.indexOf(q);
+      while (i >= 0 && out.length < 2000) {
+        out.push(i);
+        i = text.indexOf(q, i + Math.max(1, q.length));
+      }
+      return out;
+    }
+
+    function scrollTo(offset, len) {
+      if (!codeEl) return;
+      const node = codeEl.firstChild;
+      if (!node || node.nodeType !== 3) return;
+      const start = Math.max(0, Math.min(offset, node.length));
+      const end = Math.max(start, Math.min(offset + len, node.length));
+      try {
+        const r = document.createRange();
+        r.setStart(node, start);
+        r.setEnd(node, end);
+        const rect = r.getBoundingClientRect();
+        const box = codeEl.getBoundingClientRect();
+        codeEl.scrollTop += (rect.top - box.top) - codeEl.clientHeight / 2 + rect.height / 2;
+      } catch (e) {}
+    }
+
+    function step(dir) {
+      const q = query();
+      if (!q) { findCount.textContent = ''; return; }
+      const list = hits();
+      if (!list.length) { findCount.textContent = '无结果'; return; }
+      findIdx = (findIdx + dir + list.length) % list.length;
+      const off = list[findIdx];
+      scrollTo(off, q.length);
+      const line = ((codeEl.textContent || '').slice(0, off).match(/\n/g) || []).length + 1;
+      findCount.textContent = (findIdx + 1) + '/' + list.length + ' · 第 ' + line + ' 行';
+    }
+
+    findInput.addEventListener('input', function () {
+      findIdx = -1;
+      const list = hits();
+      findCount.textContent = query() ? (list.length ? (list.length + ' 处') : '无结果') : '';
+    });
+    findInput.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        step(e.shiftKey ? -1 : 1);
+      } else if (e.key === 'Escape') {
+        findInput.blur();
+      }
+    });
+    if (btnPrev) btnPrev.addEventListener('click', function () { step(-1); });
+    if (btnNext) btnNext.addEventListener('click', function () { step(1); });
+    // 代码刷新后重置命中位置
+    if (codeEl && window.MutationObserver) {
+      new MutationObserver(function () { findIdx = -1; })
+        .observe(codeEl, { childList: true, characterData: true, subtree: true });
+    }
+  })();
+
   function injectChrome(html) {
     if (/<\/head>/i.test(html)) html = html.replace(/<\/head>/i, CHROME_STYLE + '\n</head>');
     else html = CHROME_STYLE + html;
@@ -950,18 +1041,28 @@ contextBridge.exposeInMainWorld('emberWin', {
         stdio: ['ignore', 'pipe', 'pipe']
       });
       let buf = '';
+      const tail = [];                 // ★ 保留最后若干行，失败时带进错误信息
       function handle(chunk) {
         buf += chunk.toString();
         const parts = buf.split(/\r?\n/);
         buf = parts.pop();
-        parts.forEach(function (l) { const s = l.trim(); if (s && onLine) onLine(s); });
+        parts.forEach(function (l) {
+          const s = l.trim();
+          if (!s) return;
+          tail.push(s);
+          if (tail.length > 40) tail.shift();
+          if (onLine) onLine(s);
+        });
       }
       proc.stdout.on('data', handle);
       proc.stderr.on('data', handle);
-      proc.on('error', reject);
+      proc.on('error', function (e) {
+        reject(new Error('无法启动 npx：' + (e && e.message ? e.message : e) +
+          '\n（可能没安装 Node.js，或 npx 不在 PATH 里）'));
+      });
       proc.on('close', function (code) {
-        if (code === 0) resolve();
-        else reject(new Error('构建进程退出码 ' + code));
+        if (code === 0) { resolve(); return; }
+        reject(new Error('构建进程退出码 ' + code + '\n\n最后的输出：\n' + (tail.join('\n') || '(无输出)')));
       });
     });
   }
@@ -1038,6 +1139,8 @@ contextBridge.exposeInMainWorld('emberWin', {
       }
 
       packBtn.disabled = true;
+      let appDir = '';                 // ★ 提到外面：失败时要知道临时目录在哪
+      const buildLog = [];             // ★ 完整构建日志（失败时写文件 + 弹窗展示）
       try {
         // 1) 选输出位置（应用名在这里输入）
         if (!ipc || !ipc.invoke) { setStatus('打包功能仅在桌面版可用'); return; }
@@ -1053,7 +1156,7 @@ contextBridge.exposeInMainWorld('emberWin', {
         name = name.replace(/[\\/:*?"<>|]/g, '_');
         const doBuild = !!(portableCb && portableCb.checked);
         // ★ 勾选"立即构建"时：项目建在系统临时目录（你看不到），构建完只把 exe 复制出来
-        const appDir = doBuild ? path.join(os.tmpdir(), 'ember-build-' + Date.now()) : path.join(outDir, name);
+        appDir = doBuild ? path.join(os.tmpdir(), 'ember-build-' + Date.now()) : path.join(outDir, name);
 
 
         // 2) 生成项目文件
@@ -1062,6 +1165,16 @@ contextBridge.exposeInMainWorld('emberWin', {
         await fs.promises.writeFile(path.join(appDir, 'main.js'), SHELL_MAIN, 'utf8');
         await fs.promises.writeFile(path.join(appDir, 'preload.js'), SHELL_PRELOAD, 'utf8');
         await fs.promises.writeFile(path.join(appDir, 'app.html'), injectChrome(html), 'utf8');
+
+        // ★ 页面引用了本地 phaser.min.js 时，把库一起放进打包目录
+        //   （否则打出来的 exe 找不到库，只能靠 CDN，断网就白屏）
+        let hasPhaserLib = false;
+        try {
+          if (/<script[^>]+src\s*=\s*["']phaser\.min\.js["']/i.test(html)) {
+            const r = await ipc.invoke('game-copy-phaser', path.join(appDir, 'app.html'));
+            if (r && r.ok) hasPhaserLib = true;
+          }
+        } catch (e) { hasPhaserLib = false; }
 
         // ★ 复制应用图标（没选到就用默认 Ember 图标）
         let iconFile = '';
@@ -1085,7 +1198,9 @@ contextBridge.exposeInMainWorld('emberWin', {
             productName: name,
             electronVersion: process.versions.electron,
             directories: { output: 'dist' },
-            files: ['main.js', 'preload.js', 'app.html', 'package.json'].concat(iconFile ? [iconFile] : []),
+            files: ['main.js', 'preload.js', 'app.html', 'package.json']
+              .concat(iconFile ? [iconFile] : [])
+              .concat(hasPhaserLib ? ['phaser.min.js'] : []),
             win: {
               target: [
                 { target: 'portable', arch: ['x64'] }
@@ -1101,6 +1216,18 @@ contextBridge.exposeInMainWorld('emberWin', {
           }
         };
         if (iconFile) pkg.build.win.icon = iconFile;
+
+        // ★ 复用本地 electron 运行时（仅限源码/开发环境，避免离线打包时去 GitHub 下载）
+        //   分发给别人的 Ember 里没有 node_modules（electron 是 devDependency），
+        //   这段会自动跳过，仍由 electron-builder 自己下载并缓存。
+        try {
+          if (process.defaultApp) {
+            const localElectronDist = path.join(process.cwd(), 'node_modules', 'electron', 'dist');
+            if (fs.existsSync(path.join(localElectronDist, 'electron.exe'))) {
+              pkg.build.electronDist = localElectronDist;
+            }
+          }
+        } catch (e) {}
         await fs.promises.writeFile(path.join(appDir, 'package.json'), JSON.stringify(pkg, null, 2), 'utf8');
         await fs.promises.writeFile(path.join(appDir, 'build.bat'), buildBat(), 'utf8');
         await fs.promises.writeFile(path.join(appDir, '使用说明.txt'), projectReadme(name), 'utf8');
@@ -1135,13 +1262,70 @@ contextBridge.exposeInMainWorld('emberWin', {
         }
 
 
+        // ★ 构建前环境自检：提前把"别人机器上最容易踩的坑"讲清楚
+        try {
+          // ① 开发人员模式（electron-builder 解压 winCodeSign 时需要创建符号链接）
+          let devMode = true;
+          try {
+            const r = require('child_process').execSync(
+              'reg query "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModelUnlock" /v AllowDevelopmentWithoutDevLicense',
+              { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] }
+            ).toString();
+            devMode = /0x1\b/.test(r);
+          } catch (e) { devMode = false; }
+
+          // ② 本机是否已经有 electron 缓存（决定首次要下多少）
+          const cacheElectron = path.join(process.env.LOCALAPPDATA || '', 'electron-builder', 'Cache', 'electron');
+          const needDownload = !fs.existsSync(cacheElectron);
+
+          const lines = [];
+          lines.push('即将开始打包，先确认一下环境：');
+          lines.push('');
+          lines.push('· Node.js / npx：✅ 已检测到');
+          lines.push('· 本地 electron-builder：' +
+            (findBuilderCli(fsMod, pathMod, appDir) ? '✅ 有（不需要联网下载）' : '⚠ 没有，需联网下载约 50 MB'));
+          lines.push('· electron 运行时缓存：' +
+            (needDownload ? '⚠ 首次需要下载约 100 MB + winCodeSign 140 MB' : '✅ 已有缓存'));
+          lines.push('· Windows 开发人员模式：' +
+            (devMode ? '✅ 已开启' : '❌ 未开启（很可能导致打包失败）'));
+          if (!devMode) {
+            lines.push('');
+            lines.push('⚠ 打包时需要创建符号链接，没开这个开关通常会报');
+            lines.push('   "Cannot create symbolic link" 并以失败告终。');
+            lines.push('   开启方式：设置 → 系统 → 开发者选项 → 开发人员模式');
+          }
+          lines.push('');
+          lines.push('继续打包吗？');
+
+          const go = await ask(lines.join('\n'));
+          if (!go) { setStatus('已取消打包'); return; }
+        } catch (e) {}
+
         setBusy(true);                                   // ★ 高亮状态栏 + 防误关
         setStatus('⏳ 正在构建应用（首次需联网下载依赖，约 3～10 分钟，请耐心等待，勿关闭窗口）...');
         try {
-          await runNpx(['--yes', 'electron-builder', '--win', '--publish', 'never'], appDir, function (line) {
+          const onLine = function (line) {
+            buildLog.push(line);                       // ★ 收集完整日志
             const shortLine = line.length > 90 ? ('…' + line.slice(-90)) : line;
             setStatus('⏳ 构建中：' + shortLine);
-          });
+          };
+
+          // ★ 优先用 Ember 自带的 electron-builder（本机已装，不需要联网重下）
+          const cliJs = findBuilderCli(fsMod, pathMod, appDir);
+          const nodeExe = findNode(fsMod);
+
+          if (cliJs && nodeExe) {
+            buildLog.push('[环境] 使用本地 electron-builder：' + cliJs);
+            buildLog.push('[环境] Node：' + nodeExe);
+            setStatus('⏳ 正在构建（使用本地 electron-builder，无需联网下载）...');
+            await runStream(nodeExe, [cliJs, '--win', '--publish', 'never'], appDir, onLine);
+          } else {
+            buildLog.push('[环境] 未找到本地 electron-builder，改用 npx（需要联网）');
+            buildLog.push('  findBuilderCli = ' + (cliJs || '(空)'));
+            buildLog.push('  findNode       = ' + (nodeExe || '(空)'));
+            setStatus('⏳ 正在构建（首次需联网下载 electron-builder，请耐心等待）...');
+            await runNpx(['--yes', 'electron-builder', '--win', '--publish', 'never'], appDir, onLine);
+          }
         } finally {
           setBusy(false);
         }
@@ -1178,7 +1362,29 @@ contextBridge.exposeInMainWorld('emberWin', {
         if (await ask('构建完成：\n' + distDir + '\n' + (produced.length ? produced.join('\n') : '') + '\n\n现在打开 dist 文件夹吗？')) openFolder(distDir);
 
       } catch (err) {
-        setStatus('打包失败：' + (err && err.message ? err.message : err));
+        const msg = (err && err.message ? err.message : String(err));
+        // ★ 把完整日志写到构建目录里，方便排查 / 手动重试
+        let logPath = '';
+        try {
+          if (appDir && fsMod.existsSync(appDir)) {
+            logPath = pathMod.join(appDir, 'build-log.txt');
+            fsMod.writeFileSync(logPath, '构建时间：' + new Date().toLocaleString() + '\n' +
+              '退出信息：\n' + msg + '\n\n===== 完整输出 =====\n' + buildLog.join('\n'), 'utf8');
+          }
+        } catch (e) {}
+
+        setStatus('打包失败：' + msg.split('\n')[0]);
+
+        let hint = '打包失败。\n\n' + msg;
+        if (logPath) hint += '\n\n完整日志已保存到：\n' + logPath;
+        if (appDir && fsMod.existsSync(appDir)) {
+          hint += '\n\n构建目录（保留了项目文件）：\n' + appDir +
+            '\n可双击里面的 build.bat 手动重试，能看到完整过程。';
+        }
+        try {
+          const openIt = await ask(hint + '\n\n现在打开这个目录吗？');
+          if (openIt && appDir) openFolder(appDir);
+        } catch (e) {}
       } finally {
         setBusy(false);
         packBtn.disabled = false;

@@ -212,9 +212,22 @@ function registerBrowserIPC() {
   ipcMain.handle('preview-html', async (event, html) => {
     try {
       const os = require('os');
+      const fsx = require('fs');
       // ★ 固定文件名，反复覆盖 —— 不再往临时目录堆文件
-      const file = path.join(os.tmpdir(), 'ember-preview.html');
-      require('fs').writeFileSync(file, html, 'utf-8');
+      const tmpDir = os.tmpdir();
+      const file = path.join(tmpDir, 'ember-preview.html');
+
+      // ★ 把应用自带的 phaser.min.js 放到预览目录，
+      //   这样预览里的游戏可以用 <script src="phaser.min.js"> 走本地库（离线也能跑）
+      try {
+        const phSrc = path.join(__dirname, '..', 'lib', 'phaser.min.js');
+        const phDst = path.join(tmpDir, 'phaser.min.js');
+        if (fsx.existsSync(phSrc) && !fsx.existsSync(phDst)) {
+          fsx.copyFileSync(phSrc, phDst);
+        }
+      } catch (e) {}
+
+      fsx.writeFileSync(file, html, 'utf-8');
       const url = 'file:///' + file.replace(/\\/g, '/');
 
       // ★ 已有预览窗口 → 只刷新内容，不新建（这是"越点越卡"的根治）
@@ -245,6 +258,34 @@ function registerBrowserIPC() {
     }
   });
 
+  // ★ 直接打开磁盘上的某个 HTML 文件（多文件游戏用：index.html + js/*.js 能正常加载）
+  ipcMain.handle('open-html-file', async (event, filePath) => {
+    try {
+      const fsx = require('fs');
+      const target = path.resolve(String(filePath || ''));
+      if (!/\.html?$/i.test(target)) return { ok: false, error: '不是 HTML 文件' };
+      if (!fsx.existsSync(target)) return { ok: false, error: '文件不存在：' + target };
+
+      // 已开过预览窗口 → 直接换成这个文件
+      if (previewWin && !previewWin.isDestroyed()) {
+        try {
+          previewWin.show();
+          previewWin.focus();
+          const view = previewWin._browserView;
+          const wc = view && view.webContents;
+          if (wc && !wc.isDestroyed()) wc.loadFile(target);
+          return { ok: true, path: target, reused: true };
+        } catch (e) {}
+      }
+
+      const url = 'file:///' + target.replace(/\\/g, '/');
+      previewWin = createBrowserWindow(url);
+      previewWin.on('closed', function () { previewWin = null; });
+      return { ok: true, path: target, reused: false };
+    } catch (e) {
+      return { ok: false, error: e.message || String(e) };
+    }
+  });
 
   ipcMain.handle('browser-nav', (event, payload) => {
     const win = BrowserWindow.fromWebContents(event.sender);

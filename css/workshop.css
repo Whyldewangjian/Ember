@@ -288,6 +288,52 @@
 }
 
 /* ===== APP工坊：代码区 / 按钮条 ===== */
+.ws-findbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-bottom: 1px solid rgba(255,255,255,.07);
+  background: rgba(255,255,255,.02);
+  flex: 0 0 auto;
+}
+.ws-find-ico { color: var(--text-dim); font-size: 12px; }
+.ws-findbar input {
+  flex: 1;
+  min-width: 0;
+  background: var(--input-bg);
+  border: 1px solid var(--panel-input-border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 12px;
+  padding: 5px 9px;
+  outline: none;
+  font-family: inherit;
+}
+.ws-findbar input:focus { border-color: var(--accent); }
+.ws-find-count {
+  font-size: 11px;
+  color: var(--text-dim);
+  min-width: 80px;
+  text-align: right;
+  white-space: nowrap;
+}
+.ws-findbar button {
+  background: transparent;
+  border: 1px solid var(--panel-input-border);
+  color: var(--text-muted);
+  border-radius: 6px;
+  width: 26px;
+  height: 26px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  transition: all .15s;
+}
+.ws-findbar button:hover { color: var(--accent); border-color: var(--accent); }
+
 .ws-code {
   flex: 1;
   margin: 0;
@@ -799,6 +845,153 @@
 .ag-root-open { border: none; background: transparent; color: var(--text-dim); cursor: pointer; font-size: 12px; padding: 2px 4px; border-radius: 5px; line-height: 1; }
 .ag-root-open:hover { color: var(--accent); background: var(--accent-softer); }
 
+/* ==========================================================================
+   ★ 工作文件夹：卡片式布局
+   一个文件夹 = 一张卡片（卡片头放名字和控制按钮，卡片体是它自己的文件树）
+   ========================================================================== */
+
+/* 顶部项目切换行 */
+.ag-project-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--card-border);
+}
+.ag-project-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-soft);
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.ag-project-label i { color: var(--accent); font-size: 11px; }
+.ag-project-select {
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--card-border);
+  border-radius: 7px;
+  background: var(--panel-input-bg);
+  color: var(--text-soft);
+  font-size: 12px;
+  outline: none;
+  cursor: pointer;
+}
+
+.ag-roots {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 2px 2px 2px 0;
+}
+
+.ag-root-card {
+  border: 1px solid var(--card-border);
+  border-radius: 10px;
+  background: var(--panel-bg);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.ag-root-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 8px;
+  font-size: 12.5px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.ag-root-toggle {
+  width: 14px;
+  flex-shrink: 0;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 9px;
+  text-align: center;
+}
+.ag-root-toggle i { transition: transform .15s ease; display: inline-block; }
+.ag-root-card.collapsed .ag-root-toggle i { transform: rotate(-90deg); }
+
+.ag-root-folder { color: var(--accent); flex-shrink: 0; font-size: 11px; }
+
+.ag-root-body {
+  border-top: 1px solid var(--card-border);
+  padding: 4px 2px 6px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+.ag-root-card.collapsed .ag-root-body { display: none; }
+
+.ag-root-empty { font-size: 11.5px; color: var(--text-dim); padding: 6px 10px; }
+
+/* 卡片里的文件树不再需要自己的边框和背景 */
+.ag-root-body .ag-tree-ul { padding: 0; margin: 0; }
+
+/* 每个工作文件夹的「询问 / 自动」开关 */
+.ag-root-mode {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  border: 1px solid var(--card-border);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 10.5px;
+  font-family: inherit;
+  padding: 2px 7px;
+  border-radius: 6px;
+  line-height: 1.4;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: all .15s ease;
+}
+.ag-root-mode:hover { border-color: var(--border-accent-strong); color: var(--text-soft); }
+.ag-root-mode i { font-size: 9px; }
+.ag-root-mode.auto {
+  border-color: var(--accent);
+  background: var(--accent-softer);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* 工具栏里的全局「自动 / 询问」开关 */
+.ag-auto-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--card-border);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 11px;
+  font-family: inherit;
+  padding: 3px 10px;
+  border-radius: 7px;
+  line-height: 1.4;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: all .15s ease;
+}
+.ag-auto-toggle:hover { border-color: var(--border-accent-strong); color: var(--text-soft); }
+.ag-auto-toggle.auto {
+  border-color: var(--accent);
+  background: var(--accent-softer);
+  color: var(--accent);
+  font-weight: 600;
+}
+.ag-auto-toggle i { font-size: 10px; }
+
 /* 文件树 */
 .ag-tree { flex: 1; min-height: 0; overflow: auto; border: 1px solid var(--card-border); border-radius: 12px; background: rgba(0, 0, 0, 0.16); padding: 6px 4px; }
 .ag-tree-empty { flex: 1; display: flex; align-items: center; justify-content: center; padding: 20px 14px; font-size: 12.5px; color: var(--text-dim); text-align: center; line-height: 1.8; }
@@ -853,6 +1046,32 @@
 .ag-done-head i { font-size: 17px; }
 .ag-done-sub { margin-top: 6px; font-size: 12.5px; color: var(--text-soft); line-height: 1.65; }
 .ag-done-item { margin-top: 3px; font-size: 12.5px; color: #9ff0d0; font-family: Consolas, "Courier New", monospace; word-break: break-all; }
+.ag-run-row { margin-top: 10px; }
+.ag-run-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  background: var(--accent);
+  color: var(--btn-text, #07231a);
+  border: 0;
+  border-radius: 8px;
+  padding: 8px 18px;
+  font-size: 13px;
+  font-weight: 800;
+  cursor: pointer;
+  font-family: inherit;
+  transition: filter .15s, transform .1s;
+}
+.ag-run-btn:hover { filter: brightness(1.08); }
+.ag-run-btn:active { transform: translateY(1px); }
+.ag-run-btn:disabled { opacity: .6; cursor: default; }
+.ag-run-btn + .ag-run-btn { margin-left: 8px; }
+.ag-run-exe {
+  background: transparent;
+  border: 1px solid var(--accent);
+  color: var(--accent);
+}
+.ag-run-exe:hover { background: var(--accent-soft, rgba(62,207,142,.12)); filter: none; }
 .ag-done-warn {
   background: linear-gradient(135deg, rgba(224, 82, 82, 0.22), rgba(224, 82, 82, 0.08));
   border-color: rgba(224, 82, 82, 0.60);
@@ -926,4 +1145,22 @@
 .ag-preset-form input, .ag-preset-form textarea { width: 100%; box-sizing: border-box; background: var(--panel-bg); color: var(--text-soft); border: 1px solid var(--card-border); border-radius: 8px; padding: 8px 10px; font-size: 13px; font-family: inherit; resize: vertical; }
 .ag-preset-form-actions { display: flex; gap: 8px; margin-top: 12px; }
 .ag-preset-add { margin-top: 12px; }
+
+/* ==========================================================================
+   ★ 全局「文字大小」在本文件各模式里的应用
+   同一套 --fs-scale（设置里的小 / 中 / 大），让输入框和输出文字一起放大缩小
+   ========================================================================== */
+
+/* Agent：输入框 + 对话气泡 + 活动行 + 完成清单 */
+.ag-input-row textarea { font-size: calc(14px * var(--fs-scale, 1)); }
+.ag-bubble { font-size: calc(13px * var(--fs-scale, 1)); }
+.ag-activity { font-size: calc(12px * var(--fs-scale, 1)); }
+.ag-done-sub,
+.ag-done-item { font-size: calc(12.5px * var(--fs-scale, 1)); }
+
+/* 工坊：生成的代码 / 结果 */
+.ws-code { font-size: calc(13px * var(--fs-scale, 1)); }
+
+/* 分镜表格：表格正文 */
+.sb-table-wrap table { font-size: calc(13px * var(--fs-scale, 1)); }
 

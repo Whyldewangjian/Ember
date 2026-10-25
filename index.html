@@ -12,21 +12,14 @@
 
   <!-- 顶部栏（可拖拽移动窗口） -->
   <div class="top-bar">
-    <div class="app-logo">
-      <img src="image/Ember_Logo.png" class="app-logo-wide" alt="Ember">
-      <div class="app-title-wrap">
-        <span class="app-version">v 1.3.1</span>
-      </div>      
+    <div class="top-left">
+      <div class="app-logo">
+        <img src="image/Ember_Logo.png" class="app-logo-wide" alt="Ember">
+      </div>
+      <span class="logo-sep"></span>
+      <span class="mode-tag"><i class="fas fa-wand-magic-sparkles"></i> 提示词生成</span>
     </div>
     <div class="right-actions">
-      <div class="status-bar">
-        <span class="model-select-label">模型选择 -</span>
-        <select id="homeModelSelect" class="home-model-select" title="选择模型"></select>
-        <span class="status-text" id="statusText" style="display:none;">检测中...</span>
-        <span class="status-dot" id="statusDot" title="连接状态"></span>
-      </div>
-
-
       <button class="history-btn" id="historyBtn" title="历史记录"><i class="fas fa-history" data-icon-key="history"></i> 历史</button>
       <button class="settings-btn" id="settingsBtn"><i class="fas fa-cog" data-icon-key="settings"></i> 设置</button>
       <div class="win-controls">
@@ -44,8 +37,20 @@
       <div class="card">
         <div class="card-header">
           <span class="card-icon"><i class="fas fa-comment-dots" data-icon-key="input"></i></span>
-          <span class="card-title">提示词内容</span><button class="fr-toggle-btn" id="frToggleBtn" title="搜索 / 替换（Ctrl+F）"><i class="fas fa-search"></i></button>
-          <span class="card-badge"><i class="fas fa-user"></i> 用户输入</span>
+          <span class="card-title">提示词内容</span>
+          <button class="fr-toggle-btn" id="frToggleBtn" title="搜索 / 替换（Ctrl+F）"><i class="fas fa-search"></i></button>
+          <span class="card-hdr-label">类型</span>
+          <select id="homeTypeSel" class="home-type-select" title="选择提示词类型">
+            <option value="img">生图提示词</option>
+            <option value="video">视频提示词</option>
+          </select>
+          <span class="card-hdr-label">模型</span>
+          <select id="homeModelSelect" class="home-model-select hdr-model-select" title="选择生成提示词用的模型"></select>
+          <span class="status-dot" id="statusDot" title="连接状态"></span>
+          <span class="status-text" id="statusText" style="display:none;">检测中...</span>
+          <button class="clear-page-btn" id="clearHomeBtn" title="清空本页：字段、参考图、提示词、生成的图片">
+            <i class="fas fa-trash-can"></i> 清空页面
+          </button>
         </div>
         <!-- ★ 搜索 / 替换条 -->
         <div class="find-replace-bar collapsed" id="findReplaceBar">
@@ -60,50 +65,489 @@
         <!-- ★ 图片预览条：拖拽/粘贴上传参考图 -->
         <div class="img-preview-bar" id="imgPreviewBar">
           <div class="img-preview-empty" id="imgPreviewEmpty">
-            <i class="fas fa-image"></i> 点击浏览/拖拽图片到此处，或 Ctrl+V 粘贴
+            <i class="fas fa-image"></i> 点击浏览/拖拽图片到此处，或 Ctrl+V 粘贴（加完双击名字可改名）
           </div>
         </div>
+
+        <!-- ★ 生图结构化字段 -->
+        <div class="home-form" id="homeImgForm">
+          <div class="home-row">
+            <div class="ifield">
+              <label>风格</label>
+              <select id="optStyle" class="ai-default">
+                <option value="">由 AI 决定</option>
+                <option value="电影感">电影感</option>
+                <option value="写实摄影">写实摄影</option>
+                <option value="3D 渲染">3D 渲染</option>
+                <option value="黑白日漫">黑白日漫</option>
+                <option value="彩色日漫">彩色日漫</option>
+                <option value="油画">油画</option>
+                <option value="国风水墨">国风水墨</option>
+                <option value="赛博朋克">赛博朋克</option>
+              </select>
+            </div>
+            <div class="ifield">
+              <label>景别</label>
+              <select id="optShot" class="ai-default">
+                <option value="">由 AI 决定</option>
+                <optgroup label="拍人 · 人像">
+                  <option value="面部特写">面部特写（只拍头）</option>
+                  <option value="头肩像">头肩像（头 + 肩）</option>
+                  <option value="胸像">胸像（拍到胸口）</option>
+                  <option value="半身像">半身像（拍到腰）</option>
+                  <option value="牛仔镜头">牛仔镜头（拍到大腿）</option>
+                  <option value="七分身">七分身（拍到膝盖）</option>
+                  <option value="全身像">全身像（从头到脚）</option>
+                  <option value="环境人像">环境人像（人 + 周围场景）</option>
+                </optgroup>
+                <optgroup label="拍景 · 影视">
+                  <option value="大远景 EWS">大远景 EWS</option>
+                  <option value="远景 WS">远景 WS</option>
+                  <option value="全景 FS">全景 FS</option>
+                  <option value="中全景 MFS">中全景 MFS</option>
+                  <option value="中景 MS">中景 MS</option>
+                  <option value="近景 MCU">近景 MCU</option>
+                  <option value="特写 CU">特写 CU</option>
+                  <option value="大特写 ECU">大特写 ECU</option>
+                  <option value="微距 Macro">微距 Macro</option>
+                </optgroup>
+              </select>
+            </div>
+            <div class="ifield">
+              <label>角度</label>
+              <select id="optAngle" class="ai-default">
+                <option value="">由 AI 决定</option>
+                <option value="正面">正面（正对镜头）</option>
+                <option value="四分之三侧">四分之三侧（人像常用）</option>
+                <option value="平视">平视 Eye-level</option>
+                <option value="仰拍">仰拍 Low angle</option>
+                <option value="俯拍">俯拍 High angle</option>
+                <option value="顶拍">顶拍 Top-down</option>
+                <option value="贴地低角度">贴地低角度 Ground-level</option>
+                <option value="荷兰角">荷兰角 Dutch angle</option>
+                <option value="过肩">过肩 Over-the-shoulder</option>
+                <option value="正侧">正侧 Profile</option>
+                <option value="背侧">背侧 Back view</option>
+                <option value="主观视角">主观视角 POV</option>
+                <option value="镜面反射">镜面反射 Reflection</option>
+              </select>
+            </div>
+          </div>
+          <div class="home-row">
+            <div class="ifield" style="flex:1.25">
+              <label>地点</label>
+              <input type="text" id="optPlace" data-at="1" placeholder="城市赛道 / 室内咖啡馆（打 @ 可引用参考图）">
+            </div>
+            <div class="ifield" style="flex:1.05">
+              <label>时间</label>
+              <input type="text" id="optTime" data-at="1" placeholder="黄昏 / 暴雨夜（打 @ 可引用参考图）">
+            </div>
+            <div class="ifield" style="flex:1">
+              <label>光线</label>
+              <select id="optLight" class="ai-default">
+                <option value="">由 AI 决定</option>
+                <optgroup label="自然光">
+                  <option value="顺光">顺光（正面光）</option>
+                  <option value="侧光">侧光</option>
+                  <option value="侧逆光">侧逆光</option>
+                  <option value="逆光">逆光</option>
+                  <option value="顶光">顶光</option>
+                  <option value="黄金时刻">黄金时刻</option>
+                  <option value="蓝调时刻">蓝调时刻</option>
+                  <option value="阴天柔光">阴天柔光</option>
+                  <option value="窗户光">窗户光</option>
+                  <option value="丁达尔光束">丁达尔光束</option>
+                  <option value="月光">月光</option>
+                </optgroup>
+                <optgroup label="影棚布光">
+                  <option value="伦勃朗光">伦勃朗光（三角光）</option>
+                  <option value="蝴蝶光">蝴蝶光</option>
+                  <option value="环形光">环形光</option>
+                  <option value="分割光">分割光</option>
+                  <option value="三点布光">三点布光</option>
+                  <option value="轮廓光">轮廓光</option>
+                  <option value="柔光箱">柔光箱</option>
+                  <option value="硬光">硬光</option>
+                </optgroup>
+                <optgroup label="氛围光">
+                  <option value="霓虹光">霓虹光</option>
+                  <option value="双色补光">双色补光</option>
+                  <option value="火光">火光</option>
+                  <option value="烛光">烛光</option>
+                  <option value="体积光">体积光</option>
+                  <option value="高调">高调（明亮）</option>
+                  <option value="低调">低调（暗调）</option>
+                  <option value="剪影">剪影</option>
+                </optgroup>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <!-- ★ 视频提示词表单 -->
+        <div class="home-form" id="homeVideoForm" style="display:none;">
+
+          <div class="home-row">
+            <div class="ifield" style="flex:1;">
+              <label>镜头模式</label>
+              <div class="seg-mini" id="vidModeSeg">
+                <button type="button" class="on" data-mode="single">单镜头</button>
+                <button type="button" data-mode="multi">多镜头</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- ===== 单镜头 ===== -->
+          <div id="vidSingleBox">
+            <div class="home-row">
+              <div class="ifield">
+                <label>时长</label>
+                <input type="number" id="vidDur" class="vid-num" value="5" min="4" max="30" step="1">
+              </div>
+              <div class="ifield">
+                <label>比例</label>
+                <select id="vidRatio" class="ai-default">
+                  <option value="16:9">16:9</option>
+                  <option value="9:16">9:16</option>
+                  <option value="1:1">1:1</option>
+                  <option value="4:3">4:3</option>
+                  <option value="3:4">3:4</option>
+                  <option value="21:9">21:9</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="home-row">
+              <div class="ifield">
+                <label>景别</label>
+                <select id="vidShot" class="ai-default">
+                  <option value="">由 AI 决定</option>
+                  <optgroup label="拍人 · 人像">
+                    <option value="面部特写">面部特写（只拍头）</option>
+                    <option value="头肩像">头肩像（头 + 肩）</option>
+                    <option value="胸像">胸像（拍到胸口）</option>
+                    <option value="半身像">半身像（拍到腰）</option>
+                    <option value="牛仔镜头">牛仔镜头（拍到大腿）</option>
+                    <option value="七分身">七分身（拍到膝盖）</option>
+                    <option value="全身像">全身像（从头到脚）</option>
+                    <option value="环境人像">环境人像（人 + 周围场景）</option>
+                  </optgroup>
+                  <optgroup label="拍景 · 影视">
+                    <option value="大远景 EWS">大远景 EWS</option>
+                    <option value="远景 WS">远景 WS</option>
+                    <option value="全景 FS">全景 FS</option>
+                    <option value="中全景 MFS">中全景 MFS</option>
+                    <option value="中景 MS">中景 MS</option>
+                    <option value="近景 MCU">近景 MCU</option>
+                    <option value="特写 CU">特写 CU</option>
+                    <option value="大特写 ECU">大特写 ECU</option>
+                    <option value="微距 Macro">微距 Macro</option>
+                  </optgroup>
+                </select>
+              </div>
+              <div class="ifield">
+                <label>角度</label>
+                <select id="vidAngle" class="ai-default">
+                  <option value="">由 AI 决定</option>
+                  <option value="正面">正面（正对镜头）</option>
+                  <option value="四分之三侧">四分之三侧（人像常用）</option>
+                  <option value="平视">平视 Eye-level</option>
+                  <option value="仰拍">仰拍 Low angle</option>
+                  <option value="俯拍">俯拍 High angle</option>
+                  <option value="顶拍">顶拍 Top-down</option>
+                  <option value="贴地低角度">贴地低角度 Ground-level</option>
+                  <option value="荷兰角">荷兰角 Dutch angle</option>
+                  <option value="过肩">过肩 Over-the-shoulder</option>
+                  <option value="正侧">正侧 Profile</option>
+                  <option value="背侧">背侧 Back view</option>
+                  <option value="主观视角">主观视角 POV</option>
+                  <option value="镜面反射">镜面反射 Reflection</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="home-row">
+              <div class="ifield">
+                <label>光线</label>
+                <select id="vidLight" class="ai-default">
+                  <option value="">由 AI 决定</option>
+                  <option value="顺光">顺光（正面光）</option>
+                  <option value="侧光">侧光</option>
+                  <option value="侧逆光">侧逆光</option>
+                  <option value="逆光">逆光</option>
+                  <option value="顶光">顶光</option>
+                  <option value="黄金时刻">黄金时刻</option>
+                  <option value="蓝调时刻">蓝调时刻</option>
+                  <option value="阴天柔光">阴天柔光</option>
+                  <option value="窗户光">窗户光</option>
+                  <option value="丁达尔光束">丁达尔光束</option>
+                  <option value="月光">月光</option>
+                  <option value="伦勃朗光">伦勃朗光（三角光）</option>
+                  <option value="蝴蝶光">蝴蝶光</option>
+                  <option value="环形光">环形光</option>
+                  <option value="分割光">分割光</option>
+                  <option value="三点布光">三点布光</option>
+                  <option value="轮廓光">轮廓光</option>
+                  <option value="柔光箱">柔光箱</option>
+                  <option value="硬光">硬光</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="home-row">
+              <div class="ifield" style="flex:1;">
+                <label>镜头运动</label>
+                <select id="vidMotion" class="ai-default" style="width:100%;">
+                  <option value="">由 AI 决定</option>
+                  <option value="固定机位">固定机位</option>
+                  <option value="缓慢推近">缓慢推近</option>
+                  <option value="快速推近">快速推近</option>
+                  <option value="缓慢拉远">缓慢拉远</option>
+                  <option value="左右摇镜">左右摇镜</option>
+                  <option value="上下摇镜">上下摇镜</option>
+                  <option value="横向平移">横向平移</option>
+                  <option value="跟随主体移动">跟随主体移动</option>
+                  <option value="环绕旋转">环绕旋转</option>
+                  <option value="手持晃动">手持晃动</option>
+                  <option value="俯冲下压">俯冲下压</option>
+                  <option value="上升拉升">上升拉升</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="home-row">
+              <div class="ifield">
+                <label>地点</label>
+                <input type="text" id="vidPlace" data-at="1" placeholder="街道 / 室内 / 山谷（打 @ 可引用参考图）">
+              </div>
+              <div class="ifield">
+                <label>时间</label>
+                <input type="text" id="vidTime" data-at="1" placeholder="黄昏 / 深夜">
+              </div>
+            </div>
+
+            <div class="home-row">
+              <div class="ifield" style="flex:1;">
+                <label>风格</label>
+                <select id="vidStyle" class="ai-default" style="width:100%;">
+                  <option value="">由 AI 决定</option>
+                  <option value="电影感">电影感</option>
+                  <option value="写实摄影">写实摄影</option>
+                  <option value="3D 渲染">3D 渲染</option>
+                  <option value="黑白日漫">黑白日漫</option>
+                  <option value="彩色日漫">彩色日漫</option>
+                  <option value="油画">油画</option>
+                  <option value="国风水墨">国风水墨</option>
+                  <option value="赛博朋克">赛博朋克</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <!-- ===== 多镜头 ===== -->
+          <div id="vidMultiBox" style="display:none;">
+            <div class="home-row">
+              <div class="ifield">
+                <label>总时长</label>
+                <input type="number" id="vidTotalDur" class="vid-num" placeholder="可留空" min="4" max="30" step="1">
+              </div>
+              <div class="ifield">
+                <label>镜头数量</label>
+                <input type="number" id="vidShotCount" class="vid-num" placeholder="可留空" min="1" step="1">
+              </div>
+              <div class="ifield">
+                <label>比例</label>
+                <select id="vidRatio2" class="ai-default">
+                  <option value="16:9">16:9</option>
+                  <option value="9:16">9:16</option>
+                  <option value="1:1">1:1</option>
+                  <option value="4:3">4:3</option>
+                  <option value="3:4">3:4</option>
+                  <option value="21:9">21:9</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="home-row">
+              <div class="ifield" style="flex:1;">
+                <label>故事梗概</label>
+                <input type="text" id="vidStory" data-at="1" placeholder="这场戏讲什么：谁、在哪、发生了什么（打 @ 可引用参考图）">
+              </div>
+            </div>
+
+            <div class="home-row">
+              <div class="ifield">
+                <label>镜头语言</label>
+                <select id="vidLangCat" class="ai-default">
+                  <option value="">— 先选类别 —</option>
+                </select>
+              </div>
+              <div class="ifield">
+                <label>&nbsp;</label>
+                <select id="vidLangItem" class="ai-default">
+                  <option value="">— 先选类别 —</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="home-row">
+              <div class="ifield">
+                <label>地点</label>
+                <input type="text" id="vidPlace2" data-at="1" placeholder="街道 / 室内 / 山谷（打 @ 可引用参考图）">
+              </div>
+              <div class="ifield">
+                <label>时间</label>
+                <input type="text" id="vidTime2" data-at="1" placeholder="黄昏 / 深夜">
+              </div>
+            </div>
+
+            <div class="home-row">
+              <div class="ifield" style="flex:1;">
+                <label>风格</label>
+                <select id="vidStyle2" class="ai-default" style="width:100%;">
+                  <option value="">由 AI 决定</option>
+                  <option value="电影感">电影感</option>
+                  <option value="写实摄影">写实摄影</option>
+                  <option value="3D 渲染">3D 渲染</option>
+                  <option value="黑白日漫">黑白日漫</option>
+                  <option value="彩色日漫">彩色日漫</option>
+                  <option value="油画">油画</option>
+                  <option value="国风水墨">国风水墨</option>
+                  <option value="赛博朋克">赛博朋克</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="home-row">
+              <label class="vid-check">
+                <input type="checkbox" id="vidNoAudio">
+                <span>避免出现背景音乐和字幕</span>
+              </label>
+            </div>
+          </div>
+
+        </div>
+
+        <!-- ★ 视频提示词的输入区：放在 form 外面，才能像生图输入框那样随窗口自适应 -->
+        <div class="home-desc-label" id="vidDescLabel" style="display:none;">画面内容</div>
+        <div class="fr-textarea-wrap" id="vidDescWrap" style="display:none;">
+          <textarea id="vidDesc" data-at="1" placeholder="描述这一镜发生了什么：谁在做什么 + 环境 + 光线&#10;例：林川推门进来，把旧怀表放在柜台上"></textarea>
+        </div>
+
+        <div class="vid-ref-block" id="vidRefBlock" style="display:none;">
+          <div class="home-row" style="margin-bottom:4px;">
+            <div class="ifield" style="flex:1;">
+              <label>已有参考图</label>
+              <input type="text" id="vidRefs" placeholder="填名字（逗号分隔）：林川、旧怀表">
+            </div>
+          </div>
+          <div class="vid-ref-tip">已填入的参考图将不在提示词中详细描述，避免与参考图本身冲突。</div>
+        </div>
+
+        <!-- ★ 视频模式占位（保留元素避免旧逻辑报错） -->
+        <div class="home-video-soon" id="homeVideoSoon" style="display:none;">
+          <i class="fas fa-clapperboard"></i>
+          <p>视频提示词</p>
+        </div>
+
+        <div class="home-desc-label" id="homeDescLabel">画面内容描述</div>
         <!-- ★ 输入框 + 搜索高亮层 -->
         <div class="fr-textarea-wrap">
           <div class="fr-highlight-layer" id="hlInput1"></div>
-          <textarea id="input1" placeholder="请输入提示词内容..."></textarea>
+          <textarea id="input1" data-at="1" placeholder="描述画面里发生了什么：主体 + 动作 + 环境 + 光线&#10;例如：一只橘白相间的小猫趴在木质桌面上，午后阳光从窗边斜射进来，毛发边缘带逆光&#10;打 @ 可以引用上面的参考图"></textarea>
+        </div>
+        <!-- ★ 输出提示词用中文还是英文 -->
+        <div class="lang-row" id="langRow">
+          <span class="lang-label">提示词语言</span>
+          <div class="seg-mini" id="langSeg">
+            <button type="button" class="on" data-lang="zh">中文</button>
+            <button type="button" data-lang="en">English</button>
+          </div>
         </div>
       </div>
-      <div class="card">
-        <div class="card-header">
-          <span class="card-icon"><i class="fas fa-cog" data-icon-key="preset"></i></span>
-          <span class="card-title">系统预设</span>
-          <select id="presetSelect" class="preset-select"><option value="">选择预设...</option></select>
-          <button class="preset-edit-btn" id="presetEditBtn"><i class="fas fa-pen"></i> 预设编辑</button>
-          <span class="card-badge"><i class="fas fa-robot" data-icon-key="presetBadge"></i> 系统设定</span>
-        </div>
-        <!-- ★ 输入框 + 搜索高亮层 -->
-        <div class="fr-textarea-wrap">
-          <div class="fr-highlight-layer" id="hlInput2"></div>
-          <textarea id="input2" placeholder="请输入具体的预设要求"></textarea>
-        </div>
+      <!-- ★ 系统预设卡片已移除；只保留两个隐藏元素，让历史记录 / 预设相关的旧逻辑不报错 -->
+      <div style="display:none;" aria-hidden="true">
+        <select id="presetSelect"><option value="">选择预设...</option></select>
+        <textarea id="input2"></textarea>
       </div>
     </div>
     <div class="right-panel">
       <div class="card">
         <div class="card-header">
           <span class="card-icon"><i class="fas fa-lightbulb" data-icon-key="output"></i></span>
-          <span class="card-title">AI 回复</span>
+          <span class="card-title">提示词生成</span>
           <button class="copy-btn" id="copyBtn" title="复制结果" style="display:none;">
             <i class="far fa-copy"></i> 复制
           </button>
           <button class="copy-btn" id="saveResultBtn" title="保存结果" style="display:none;">
             <i class="fas fa-save"></i> 保存结果
           </button>
-          <span class="card-badge"><i class="fas fa-sparkles" data-icon-key="badge"></i> 输出结果</span>
         </div>
         <div class="output-area" id="output">
           <div class="empty-state">
             <i class="fas fa-arrow-right"></i>
-            <p>等待 AI 回复...</p>
+            <p>等待生成...</p>
           </div>
         </div>
+        <!-- ★ 生图工具条：在提示词下方，用上面的内容出图 -->
+        <div class="gen-bar">
+          <span class="gen-bar-label"><i class="fas fa-image"></i> 生图</span>
+          <select id="genModelSelect" class="gen-select" title="生图模型"></select>
+          <select id="genRatioSelect" class="gen-select gen-select-sm" title="画面比例">
+            <option value="1:1">1:1</option>
+            <option value="1:2">1:2</option>
+            <option value="2:1">2:1</option>
+            <option value="9:16">9:16</option>
+            <option value="16:9">16:9</option>
+            <option value="3:4">3:4</option>
+            <option value="4:3">4:3</option>
+            <option value="3:2">3:2</option>
+            <option value="2:3">2:3</option>
+            <option value="5:4">5:4</option>
+            <option value="4:5">4:5</option>
+            <option value="21:9">21:9</option>
+            <option value="9:21">9:21</option>
+          </select>
+          <select id="genResSelect" class="gen-select gen-select-sm" title="清晰度">
+            <option value="1k">1K</option>
+            <option value="2k">2K</option>
+            <option value="4k">4K</option>
+          </select>
+          <select id="genQualitySelect" class="gen-select gen-select-md" title="画质" style="display:none;">
+            <option value="low">低画质</option>
+            <option value="medium" selected>标准画质</option>
+            <option value="high">高画质</option>
+            <option value="xhigh">超高画质</option>
+            <option value="max">极致画质</option>
+          </select>
+          <select id="genCountSelect" class="gen-select gen-select-sm" title="生成数量" style="display:none;">
+            <option value="1">1张</option>
+            <option value="2">2张</option>
+            <option value="4">4张</option>
+          </select>
+          <label class="gen-ref-toggle" id="genRefWrap" title="把左侧上传的参考图一起传给生图模型">
+            <input type="checkbox" id="genUseRef" checked>
+            <span>带参考图<i id="genRefCount"></i></span>
+          </label>
+          <button class="gen-run-btn" id="genRunBtn" title="用上面的提示词生成图片">
+            <i class="fas fa-wand-magic-sparkles"></i> 生图
+          </button>
+        </div>
         <div class="output-meta meta-line" id="outputMeta" style="display:none;"></div>
+      </div>
+
+      <!-- ★ 生成结果 -->
+      <div class="card" id="genCard">
+        <div class="card-header">
+          <span class="card-icon"><i class="fas fa-image" data-icon-key="gen"></i></span>
+          <span class="card-title">生成结果</span>
+        </div>
+        <div class="gen-area" id="genArea">
+          <div class="gen-empty">
+            <i class="fas fa-image"></i>
+            <p>点上方「生图」把结果画在这里</p>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -118,9 +562,14 @@
   <!-- 设置弹窗 -->
   <div class="modal-overlay" id="modal">
     <div class="modal glass-modal">
-      <div class="modal-header">
-        <h2><i class="fas fa-sliders-h" data-icon-key="settingsTitle"></i> 设置中心</h2>
-        <span class="modal-subtitle">管理 API 配置与应用外观</span>
+      <div class="modal-header modal-header-row">
+        <div>
+          <h2><i class="fas fa-sliders-h" data-icon-key="settingsTitle"></i> 设置中心</h2>
+          <span class="modal-subtitle">管理 API 配置与应用外观</span>
+        </div>
+        <button class="recharge-top-btn" id="rechargeBtn" title="开通 / 充值并获取 API Key">
+          <i class="fas fa-wallet"></i> 充值并获取API
+        </button>
       </div>
       <div class="modal-body">
         <div class="modal-left">
@@ -146,13 +595,13 @@
               </select>
               <div class="color-hint">选择后立即应用全部配色与图标</div>
 
-              <label class="mt-15">🔠 对话文字大小</label>
+              <label class="mt-15">🔠 文字大小</label>
               <select id="chatFontSelect" class="font-select">
                 <option value="small">小</option>
                 <option value="medium">中</option>
                 <option value="large">大</option>
               </select>
-              <div class="color-hint">只影响对话模式的输入框与消息文字</div>
+              <div class="color-hint">调整输入框和输出结果的文字大小，所有模式一起生效</div>
 
               <!-- ★ 标题编辑区（locked 版打包时整块隐藏） -->
               <div id="titleEditSection">
@@ -163,18 +612,21 @@
             </div>
           </div>
 
-          <div class="collapse-group mt-15 open" id="convCollapseGroup">
-            <div class="collapse-header" id="convCollapseHeader">
-              <span><i class="fas fa-comments" data-icon-key="conv"></i> 对话设置</span>
+          <!-- ★ 对话设置已移除（记忆轮数已删；提示词生成不再带历史，清空记忆也用不上了） -->
+
+          <div class="collapse-group mt-15" id="webCollapseGroup">
+            <div class="collapse-header" id="webCollapseHeader">
+              <span><i class="fas fa-globe" data-icon-key="web"></i> 联网搜索</span>
               <i class="fas fa-chevron-down collapse-arrow"></i>
             </div>
-            <div class="collapse-body" id="convCollapseBody">
+            <div class="collapse-body" id="webCollapseBody">
 
-              <label>💬 对话记忆轮数</label>
-              <input type="number" id="memRoundsInput" min="0" max="20" value="5">
-              <div class="color-hint">AI 记住最近几轮对话（0 = 不记忆，每次独立问答）</div>
-
-              <button class="clear-mem-btn mt-15" id="clearMemBtn">🧹 清空对话记忆</button>
+              <label>🔑 Tavily API Key</label>
+              <input type="text" id="tavilyKeyInput" placeholder="tvly-...（留空则关闭联网搜索）" spellcheck="false" autocomplete="off">
+              <div class="color-hint">
+                在 tavily.com 免费注册即可获得（每月 1000 次免费，无需信用卡）。<br>
+                填写后，Agent 就能联网查资料、读网页内容，用于回答时效性问题。
+              </div>
 
             </div>
           </div>
@@ -238,8 +690,8 @@
   <div class="left-corner">
     <button class="pin-btn" id="pinBtn" title="点击置顶/取消置顶"><i class="fas fa-thumbtack" data-icon-key="pin"></i></button>
 
-    <button class="mode-switch" id="homeSwitchBtn" title="切换到主页">
-      <i class="fas fa-home"></i> 主页
+    <button class="mode-switch" id="homeSwitchBtn" title="提示词生成">
+      <i class="fas fa-wand-magic-sparkles"></i> 提示词生成
     </button>
 
     <button class="mode-switch" id="modeSwitch" title="切换到画布模式">
@@ -268,6 +720,7 @@
 
   <!-- 右下角时间 -->
   <div class="time-display">
+    <span class="app-version" title="当前版本">v 1.3.1</span>
     <span class="changelog-btn" id="changelogBtn">更新日志</span>
     <span class="changelog-btn" id="updateBtn" title="检查是否有新版本">检查更新</span>
     <i class="fas fa-clock" data-icon-key="clock"></i>
@@ -276,6 +729,20 @@
       <div class="time-clock" id="timeClock">--:--:--</div>
     </div>
   </div>
+
+  <!-- ★ 充值 / 获取 API 弹窗 -->
+  <div class="modal-overlay" id="rechargeModal">
+    <div class="modal glass-modal recharge-modal">
+      <div class="modal-header">
+        <h2><i class="fas fa-wallet"></i> 充值并获取 API</h2>
+      </div>
+      <div class="recharge-body" id="rechargeBody"></div>
+      <div class="modal-footer">
+        <button class="cancel-btn" id="rechargeClose"><i class="fas fa-times"></i> 关闭</button>
+      </div>
+    </div>
+  </div>
+
   <!-- ★ 更新日志弹窗 -->
   <div class="modal-overlay" id="changelogModal">
     <div class="modal glass-modal changelog-modal">
@@ -359,6 +826,7 @@
 
     <div class="canvas-toolbar">
       <img src="image/Ember_Logo.png" class="toolbar-logo" alt="Ember">
+      <span class="logo-sep"></span>
       <span class="canvas-title"><i class="fas fa-project-diagram"></i> 节点画布</span>
 
       <span class="canvas-tips">双击 / 空格 / 右键创建节点 · Ctrl+滚轮缩放 · 中键拖动画布 · Alt+左键拖拽复制</span>
@@ -391,6 +859,7 @@
   <div class="chat-mode" id="chatMode">
     <div class="chat-toolbar">
       <img src="image/Ember_Logo.png" class="toolbar-logo" alt="Ember">
+      <span class="logo-sep"></span>
       <span class="chat-title"><i class="fas fa-comment-dots"></i> 对话模式</span>
       <span class="model-select-label">模型选择 -</span>           
       <select id="chatModelSelect" class="chat-model-select" title="选择模型"></select>
@@ -422,7 +891,14 @@
     <div class="chat-list" id="chatList"></div>
     <div class="chat-input-area">
       <div class="chat-img-preview" id="chatImgPreview"></div>
-      <textarea id="chatInput" placeholder="输入消息，Ctrl+Enter 发送；可拖入图片或代码文件（文件将作为附件发送）"></textarea>
+      <div class="chat-input-box">
+        <textarea id="chatInput" placeholder="输入消息，Ctrl+Enter 发送；可拖入图片或代码文件（文件将作为附件发送）"></textarea>
+
+        <label class="chat-web-toggle" id="chatWebToggleLabel" title="勾选后，每次提问会先联网检索资料再回答（需在设置里填 Tavily Key）">
+          <input type="checkbox" id="chatWebChk">
+          <span>联网搜索</span>
+        </label>
+      </div>
 
       <div class="chat-actions">
         <button class="chat-send-btn" id="chatSendBtn"><i class="fas fa-paper-plane"></i> 发送<kbd class="kbd-hint">Ctrl ↵</kbd></button>
@@ -436,6 +912,7 @@
   <div class="app-mode" id="storyboardMode">
     <div class="canvas-toolbar">
       <img src="image/Ember_Logo.png" class="toolbar-logo" alt="Ember">
+      <span class="logo-sep"></span>
       <span class="canvas-title"><i class="fas fa-table-cells"></i> 分镜表格</span>
       <span class="canvas-tips">输入剧本与描述，生成可直接使用的分镜表</span>
       <span class="model-select-label">模型选择 -</span>
@@ -566,6 +1043,7 @@
   <div class="app-mode" id="workshopMode">
     <div class="canvas-toolbar">
       <img src="image/Ember_Logo.png" class="toolbar-logo" alt="Ember">
+      <span class="logo-sep"></span>
       <span class="canvas-title"><i class="fas fa-toolbox"></i> APP 工坊</span>
       <span class="canvas-tips">描述需求，生成可直接运行的文件</span>
       <span class="model-select-label">模型选择 -</span>
@@ -638,6 +1116,13 @@
       <div class="app-mode-resizer" id="wsResizer"></div>
 
       <div class="app-mode-right">
+        <div class="ws-findbar">
+          <i class="fas fa-magnifying-glass ws-find-ico"></i>
+          <input id="wsFindInput" type="text" placeholder="搜索代码（Enter 下一个，Shift+Enter 上一个）">
+          <span class="ws-find-count" id="wsFindCount"></span>
+          <button id="wsFindPrev" title="上一个"><i class="fas fa-chevron-up"></i></button>
+          <button id="wsFindNext" title="下一个"><i class="fas fa-chevron-down"></i></button>
+        </div>
         <pre class="ws-code" id="wsCode">生成的可运行代码会显示在这里</pre>
         <div class="ws-actions">
           <button class="primary" id="wsRunBtn"><i class="fas fa-play"></i> 运行预览</button>
@@ -657,6 +1142,7 @@
   <div class="app-mode" id="agentMode">
     <div class="canvas-toolbar">
       <img src="image/Ember_Logo.png" class="toolbar-logo" alt="Ember">
+      <span class="logo-sep"></span>
       <span class="canvas-title"><i class="fas fa-robot"></i> Agent</span>
       <span class="canvas-tips">选择工作文件夹，让 AI 自主读写文件</span>
       <span class="model-select-label">模型选择 -</span>
@@ -673,12 +1159,16 @@
     </div>
     <div class="ag-layout">
       <div class="ag-left">
+        <div class="ag-project-row">
+          <span class="ag-project-label"><i class="fas fa-layer-group"></i> 项目</span>
+          <select id="agProjectSelect" class="ag-project-select" title="切换项目（每个项目有自己的文件夹和对话）"></select>
+          <button class="chat-new-btn" id="agProjectNewBtn" title="新建项目（选择文件夹，自动以一个文件夹一个对话）"><i class="fas fa-plus"></i></button>
+          <button class="chat-new-btn" id="agProjectDelBtn" title="删除当前项目"><i class="fas fa-trash"></i></button>
+        </div>
         <div class="ag-panel-title"><i class="fas fa-folder-open"></i> 工作文件夹
           <button class="chat-new-btn" id="agAddFolderBtn" title="添加文件夹"><i class="fas fa-plus"></i> 添加</button>
         </div>
         <div class="ag-roots" id="agRootsList"></div>
-        <div class="ag-tree" id="agTree"></div>
-        <div class="ag-tree-empty" id="agTreeEmpty">还没有工作文件夹，点「添加」选择一个或多个</div>
       </div>
       <div class="ag-right">
         <div class="ag-preset-row">
@@ -836,6 +1326,7 @@
   <script src="js/marked.min.js"></script>
   <script src="js/title-mode.js"></script>
   <script src="js/presets.js"></script>
+  <script src="js/game-template.js"></script>
   <!-- ★ canvas-mode.js 放在 app.js 前面，独立运行 -->
   <script src="js/canvas-mode.js"></script>
   <script src="js/app.js"></script>
@@ -845,6 +1336,8 @@
   <script src="js/agent-mode.js"></script>
 
   <script src="js/prompt-snippets.js"></script>
+<script src="js/recharge-content.js"></script>
+<script src="js/recharge.js"></script>
 
 
 </body>

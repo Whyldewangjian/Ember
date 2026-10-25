@@ -109,6 +109,22 @@
     return /gpt|gtp/i.test(model || '');
   }
 
+  // ★ 画质档位：GPT Image 2.5 系列 5 档，其它 gpt 系列 3 档（与主页一致）
+  const QUALITY_TIERS_5 = [['low', '低画质'], ['medium', '标准画质'], ['high', '高画质'], ['xhigh', '超高画质'], ['max', '极致画质']];
+  const QUALITY_TIERS_3 = [['low', '低'], ['medium', '中'], ['high', '高']];
+  // ★ 比例：与主页生图保持一致（13 种；3:1 / 1:3 太极端，服务端会吸附成别的比例，已去掉）
+  const GEN_RATIO_LIST = ['1:1', '1:2', '2:1', '9:16', '16:9', '3:4', '4:3', '3:2', '2:3', '5:4', '4:5', '21:9', '9:21'];
+
+  function genQualityOptionsHTML(node, model) {
+    const m = String(model || '');
+    if (!supportsQuality(m)) return '';
+    const tiers = /2[.\-]?5|sunburst|flare/i.test(m) ? QUALITY_TIERS_5 : QUALITY_TIERS_3;
+    return tiers.map(function (t) {
+      const sel = (node.quality === t[0] || (!node.quality && t[0] === 'medium')) ? ' selected' : '';
+      return '<option value="' + t[0] + '"' + sel + '>' + t[1] + '</option>';
+    }).join('');
+  }
+
   // ---------- ★ 画布布局保存 / 恢复 ----------
   function saveBoardIndex() {
     try {
@@ -119,7 +135,7 @@
   function saveCanvasState() {
     try {
       const state = {
-        nodes: nodes,
+        nodes: nodesForStorage(),      // ★ 图片换成 imageRef，不塞 base64
         links: links,
         idCounter: idCounter,
         scale: scale,
@@ -132,7 +148,12 @@
         saveBoardIndex();
       }
     } catch (e) {
-      // localStorage 超限（图片过大）时忽略
+      // localStorage 超限时不再静默忽略 —— 至少让用户知道
+      try {
+        if (typeof window.showToast === 'function') {
+          window.showToast('⚠️ 画布保存失败（本地存储空间不足），请减少节点或图片数量');
+        }
+      } catch (e2) {}
     }
   }
 
@@ -145,7 +166,108 @@
     panX = state.panX || 0;
     panY = state.panY || 0;
     lastLoadedState = state;
+    // ★ 图片不在 localStorage 里，存在磁盘上；这里异步补回内存
+    hydrateAllImages();
+    // ★ 老画布的 base64 图片：加载后自动迁移到磁盘，避免继续撑爆配额
+    migrateLegacyImages();
     return true;
+  }
+
+  // ======================== ★ 参考图外置存储 ========================
+  // 内存里 node.image 始终是 data URL（渲染、发送给模型、下载都用它，不用改别处）；
+  // 只有【保存到 localStorage】这一步，把 data URL 换成 node.imageRef（磁盘文件名）。
+  // 这样 localStorage 里不再有几 MB 的 base64，配额问题根治。
+
+  function isDataUrl(s) {
+    return typeof s === 'string' && s.slice(0, 5) === 'data:';
+  }
+
+  // 把 node.image（data URL）落盘，记下文件名
+  async function persistNodeImage(node) {
+    if (!node || !ipc) return;
+    if (!isDataUrl(node.image)) return;      // 远程 http 图片不动
+    if (node.imageRef) return;               // 已经存过
+    try {
+      const r = await ipc.invoke('canvas-image-save', node.image);
+      if (r && r.ok && r.name) node.imageRef = r.name;
+    } catch (e) {}
+  }
+
+  // 加载时把 imageRef 读回成 data URL
+  async function hydrateNodeImage(node) {
+    if (!node || !ipc) return false;
+    if (node.image) return false;            // 内存里已有图
+    if (!node.imageRef) return false;
+    try {
+      const r = await ipc.invoke('canvas-image-load', node.imageRef);
+      if (r && r.ok && r.dataUrl) { node.image = r.dataUrl; return true; }
+    } catch (e) {}
+    return false;
+  }
+
+  let hydrating = false;
+  async function hydrateAllImages() {
+    if (!ipc || hydrating) return;
+    const pending = nodes.filter(function (n) { return n && n.imageRef && !n.image; });
+    if (!pending.length) return;
+    hydrating = true;
+    let changed = false;
+    try {
+      for (let i = 0; i < pending.length; i++) {
+        const ok = await hydrateNodeImage(pending[i]);
+        if (ok) changed = true;
+      }
+    } finally {
+      hydrating = false;
+    }
+    if (changed) { try { renderAll(); } catch (e) {} }
+  }
+
+  // 旧数据迁移：老画布里的图片是 base64 存在 localStorage 的，
+  // 加载后把它们逐个落盘，下一次保存就会自动瘦身。
+  let migrating = false;
+  async function migrateLegacyImages() {
+    if (!ipc || migrating) return;
+    const pending = nodes.filter(function (n) { return n && isDataUrl(n.image) && !n.imageRef; });
+    if (!pending.length) return;
+    migrating = true;
+    let done = 0;
+    try {
+      for (let i = 0; i < pending.length; i++) {
+        await persistNodeImage(pending[i]);
+        if (pending[i].imageRef) done++;
+      }
+    } finally {
+      migrating = false;
+    }
+    if (done > 0) {
+      try { saveCanvasState(); } catch (e) {}     // 立刻用瘦身后的版本覆盖
+      try {
+        if (typeof window.showToast === 'function') {
+          window.showToast('✅ 已把 ' + done + ' 张参考图转移到磁盘，画布体积已缩小');
+        }
+      } catch (e) {}
+    }
+  }
+  // ======================== 参考图外置存储结束 ========================
+
+  // 生成要写进 localStorage 的节点副本：去掉 data URL，只留 imageRef
+  function nodesForStorage() {
+    const out = [];
+    for (let i = 0; i < nodes.length; i++) {
+      const n = nodes[i];
+      const copy = Object.assign({}, n);
+      if (isDataUrl(copy.image)) {
+        if (copy.imageRef) {
+          delete copy.image;               // ★ 有磁盘文件，就不存 base64
+        } else {
+          // 还没落盘（极少见）：太大的直接丢掉，小的留着当兜底
+          if (copy.image.length > 300000) delete copy.image;
+        }
+      }
+      out.push(copy);
+    }
+    return out;
   }
 
   function loadCanvasState() {
@@ -627,6 +749,8 @@
     const reader = new FileReader();
     reader.onload = function () {
       node.image = reader.result;
+      node.imageRef = '';                      // ★ 新图，等落盘后填
+      persistNodeImage(node);                  // ★ 立刻存到磁盘（异步，不阻塞显示）
       const img = new Image();
       img.onload = function () {
         node.imageWidth = img.naturalWidth || img.width;
@@ -659,7 +783,7 @@
     imageFileInput.click();
   }
 
-  function fallbackCopyCanvas(text) {
+  function fallbackCopyCanvas(text, tip) {
     const ta = document.createElement('textarea');
     ta.value = text;
     ta.style.position = 'fixed';
@@ -668,7 +792,28 @@
     ta.select();
     document.execCommand('copy');
     document.body.removeChild(ta);
-    if (typeof showToast === 'function') showToast('已复制输出内容');
+    if (typeof showToast === 'function') showToast(tip || '已复制输出内容');
+  }
+
+  // ★ 统一复制入口：只往剪贴板写纯文本，粘贴到 Word / docx 时不会再带黑底白字
+  function copyPlainText(text, tip) {
+    const done = function () {
+      if (typeof showToast === 'function') showToast(tip || '已复制输出内容');
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done, function () { fallbackCopyCanvas(text, tip); });
+    } else {
+      fallbackCopyCanvas(text, tip);
+    }
+  }
+
+  // 选区是否落在画布节点里
+  function selectionInCanvasNode(node) {
+    while (node) {
+      if (node.nodeType === 1 && node.classList && node.classList.contains('c-node')) return true;
+      node = node.parentNode;
+    }
+    return false;
   }
 
   function showImagePreview(dataUrl) {
@@ -771,34 +916,50 @@
     el.classList.add('running');   // ★ 呼吸闪烁
 
     try {
-      let baseUrl = (api.url || '').replace(/\/+$/, '');
-      if (!/\/images\/generations$/i.test(baseUrl)) baseUrl += '/images/generations';
+      let root = (api.url || '').replace(/\/+$/, '').replace(/\/images\/(generations|edits)$/i, '');
+      const endpoint = root + '/images/generations';
 
-      const bodyObj = {
-        model: api.model,
-        prompt: finalPrompt,
+      const base = { model: api.model, prompt: finalPrompt, n: 1 };
+      if (supportsQuality(api.model)) base.quality = node.quality || 'medium';
 
-        size: computeSize(node.ratio || '1:1', node.res || '1k'),
-        n: 1
-      };
-      if (supportsQuality(api.model)) bodyObj.quality = node.quality || 'medium';
-      if (refImgs.length > 0) bodyObj.images = refImgs;
+      // 比例：实测只有 size: "宽x高" 生效（aspect_ratio / resolution 里只有 resolution 会影响像素总量，
+      //       aspect_ratio 会被服务端直接忽略并出方图），所以这里只用 size。
+      const ratioShapes = [{ size: computeSize(node.ratio || '1:1', node.res || '1k') }];
 
-      const res = await fetch(baseUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer ' + api.key
-        },
-        body: JSON.stringify(bodyObj)
+      // ★ 参考图字段：不同中转写法不一样，逐个试
+      const imgShapes = refImgs.length
+        ? [
+            { images: refImgs.map(function (u) { return { image_url: u }; }) },
+            { images: refImgs.slice() },
+            { image_url: refImgs[0] },
+            { image: { image_url: refImgs[0] } }
+          ]
+        : [{}];
+
+      const payloads = [];
+      const labels = [];
+      imgShapes.forEach(function (is, k) {
+        payloads.push(Object.assign({}, base, ratioShapes[0], is));
+        labels.push((ratioShapes[0].aspect_ratio ? 'aspect_ratio' : 'size') + '/img' + (k + 1));
       });
-
-      if (!res.ok) {
-        const errText = await res.text();
-        throw new Error('HTTP ' + res.status + ': ' + errText.slice(0, 200));
+      if (ratioShapes[1]) {
+        payloads.push(Object.assign({}, base, ratioShapes[1], imgShapes[0]));
+        labels.push('size/img1');
       }
 
-      const data = await res.json();
+      let data = null, lastErr = '', usedLabel = '';
+      for (let pi = 0; pi < payloads.length; pi++) {
+        const r1 = await fetch(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + api.key },
+          body: JSON.stringify(payloads[pi])
+        });
+        if (r1.ok) { data = await r1.json(); usedLabel = labels[pi]; break; }
+        lastErr = 'HTTP ' + r1.status + '：' + String(await r1.text()).slice(0, 160);
+        if (pi === payloads.length - 1) throw new Error(lastErr);
+      }
+      if (!data) throw new Error(lastErr || '生成失败');
+
       if (!data.data || !data.data[0]) throw new Error('返回格式异常');
 
       const img = data.data[0];
@@ -809,13 +970,34 @@
       } else {
         throw new Error('未找到图片数据');
       }
+      node.imageRef = '';                      // ★ 新图，等落盘后填
+      persistNodeImage(node);                  // ★ 生成的图也存到磁盘
 
       adjustGenNodeSize(node);
       resultEl.innerHTML =
         '<img class="c-gen-img" src="' + node.image + '" draggable="false">' +
         '<button class="c-gen-download" title="下载图片"><i class="fas fa-download"></i></button>';
       bindGenResultEvents(node, el);
-      if (typeof showToast === 'function') showToast('生成完成');
+      if (typeof showToast === 'function') {
+        // ★ 把「实际尺寸 / 请求比例 / 生效参数」直接钉在结果区角落，不会错过
+        const resBox = el.querySelector('.c-gen-result');
+        const probe = new Image();
+        probe.onload = function () {
+          const txt = probe.naturalWidth + '×' + probe.naturalHeight
+            + ' · 请求 ' + (node.ratio || '1:1') + ' · ' + usedLabel;
+          if (resBox) {
+            const old = resBox.querySelector('.c-gen-size');
+            if (old) old.remove();
+            const sp = document.createElement('span');
+            sp.className = 'c-gen-size';
+            sp.textContent = txt;
+            resBox.appendChild(sp);
+          }
+          showToast('生成完成 · ' + txt);
+        };
+        probe.onerror = function () { showToast('生成完成 · ' + usedLabel); };
+        probe.src = node.image;
+      }
     } catch (err) {
       const msg = err.message || err;
       resultEl.innerHTML = '<div class="c-gen-empty">错误：' + esc(msg) + '</div>';
@@ -879,14 +1061,16 @@
       } else if (node.type === 'gen') {
 
 
-        const showQuality = supportsQuality(genCurrentModel(node));
-        const qualityHTML = showQuality
-          ? '<select class="c-gen-quality" title="质量">' +
-              '<option value="low"' + (node.quality === 'low' ? ' selected' : '') + '>低</option>' +
-              '<option value="medium"' + (!node.quality || node.quality === 'medium' ? ' selected' : '') + '>中</option>' +
-              '<option value="high"' + (node.quality === 'high' ? ' selected' : '') + '>高</option>' +
-            '</select>'
+        const curModel = genCurrentModel(node);
+        const qOpts = genQualityOptionsHTML(node, curModel);
+        const qualityHTML = qOpts
+          ? '<select class="c-gen-quality" title="质量">' + qOpts + '</select>'
           : '';
+
+        // ★ 尺寸固定的模型（nano-banana-lite 只支持 1:1 / 1K）：锁死比例与清晰度
+        const lockedSize = /nano-?banana-?lite/i.test(curModel || '');
+        if (lockedSize) { node.ratio = '1:1'; node.res = '1k'; }
+        const lockTip = lockedSize ? ' disabled title="该模型只支持 1:1 / 1K"' : '';
 
         bodyHTML =
           '<div class="c-gen-controls">' +
@@ -896,12 +1080,12 @@
           '</div>' +
           '<div class="c-gen-controls">' +
             qualityHTML +
-            '<select class="c-gen-ratio" title="比例">' +
-              ['1:1','2:1','3:2','2:3','3:4','4:3','16:9','9:16','21:9','9:21'].map(function (r) {
+            '<select class="c-gen-ratio" title="比例"' + lockTip + '>' +
+              GEN_RATIO_LIST.map(function (r) {
                 return '<option value="' + r + '"' + (node.ratio === r ? ' selected' : '') + '>' + r + '</option>';
               }).join('') +
             '</select>' +
-            '<select class="c-gen-res" title="分辨率">' +
+            '<select class="c-gen-res" title="分辨率"' + lockTip + '>' +
               '<option value="1k"' + (!node.res || node.res === '1k' ? ' selected' : '') + '>1K</option>' +
               '<option value="2k"' + (node.res === '2k' ? ' selected' : '') + '>2K</option>' +
               '<option value="4k"' + (node.res === '4k' ? ' selected' : '') + '>4K</option>' +
@@ -914,7 +1098,7 @@
                 '<button class="c-gen-download" title="下载图片"><i class="fas fa-download"></i></button>'
                 : '<div class="c-gen-empty">连接左侧文本节点作为提示词<br>可连接图片节点作为参考图</div>') +
                 '</div>' +
-                '<textarea class="c-gen-prompt" placeholder="提示词" style="flex:0 0 auto;width:100%;height:40px;padding:6px 10px;border:none;border-top:1px solid rgba(255,255,255,0.08);border-radius:0 0 10px 10px;background:var(--panel-input-bg);color:var(--text-soft);font-size:11px;line-height:1.4;resize:none;outline:none;user-select:text;">' + esc(node.extraPrompt || '') + '</textarea>';           
+                '<textarea class="c-gen-prompt" placeholder="提示词" style="padding:6px 10px;border:none;border-top:1px solid rgba(255,255,255,0.08);border-radius:0 0 9px 9px;background:var(--panel-input-bg);color:var(--text-soft);font-size:11px;line-height:1.4;resize:none;outline:none;user-select:text;">' + esc(node.extraPrompt || '') + '</textarea>';           
         portHTML =
           '<span class="c-port c-port-in c-port-text-in" title="连接文本/预设作为提示词"></span>' +
           '<span class="c-port c-port-in c-port-img-in" title="连接图片作为参考图"></span>' +
@@ -950,13 +1134,13 @@
           '<div class="c-run-row">' +
             '<button class="c-run-btn">&#9654; 运行</button>' +
             '<span class="c-run-info"></span>' +
-            '<button class="c-copy-btn" title="复制输出"><i class="far fa-copy"></i></button>' +
+            '<button class="c-copy-btn" title="复制输出（纯文本）"><i class="fa-solid fa-copy"></i></button>' +
             '<select class="c-model-select">' + modelOptionsHTML() + '</select>' +
             '<button class="c-gear-btn" title="API 设置"><i class="fas fa-cog"></i></button>' +
           '</div>';
         portHTML =
-          '<span class="c-port c-port-in" title="接收输入"></span>' +
-          '<span class="c-port c-port-out" title="输出文本内容"></span>';
+          '<span class="c-port c-port-in" title="接收输入：文本 / 预设 / 图片 / LLM 输出"></span>' +
+          '<span class="c-port c-port-out" title="输出文本内容（可拖到另一个 LLM 输出节点继续处理）"></span>';
       }
 
       // ★ 加持节点不允许拖动右下角调整大小
@@ -1083,17 +1267,17 @@
 
     const copyBtn = el.querySelector('.c-copy-btn');
     if (copyBtn) {
-      copyBtn.addEventListener('click', function () {
+      copyBtn.addEventListener('mousedown', function (e) { e.stopPropagation(); });
+      copyBtn.addEventListener('click', function (e) {
+        e.stopPropagation();
         const outputEl = el.querySelector('.c-output-body');
-        const text = outputEl ? outputEl.innerText : (node.content || '');
-        if (text && text.trim() && text.indexOf('等待运行') < 0 && text.indexOf('AI 思考中') < 0) {
-          if (navigator.clipboard && navigator.clipboard.writeText) {
-            navigator.clipboard.writeText(text).then(function () {
-              if (typeof showToast === 'function') showToast('已复制输出内容');
-            }, function () { fallbackCopyCanvas(text); });
-          } else {
-            fallbackCopyCanvas(text);
-          }
+        // 优先取界面上正在流式输出的文字，其次取节点保存的内容
+        let text = outputEl ? outputEl.innerText : '';
+        if (!text || !text.trim() || text.indexOf('等待运行') >= 0 || text.indexOf('AI 思考中') >= 0) {
+          text = node.content || '';
+        }
+        if (text && text.trim()) {
+          copyPlainText(text, '已复制输出内容（纯文本）');
         } else {
           if (typeof showToast === 'function') showToast('暂无输出内容');
         }
@@ -1236,6 +1420,22 @@
   }
 
   // ---------- 连线 ----------
+  // ★ 成环检测：从 to 顺着已有连线能不能走回 from（LLM 输出可以串联，但不能互相指回自己）
+  function createsCycle(fromNode, toNode) {
+    if (!fromNode || !toNode) return true;
+    if (fromNode.id === toNode.id) return true;
+    const seen = {};
+    const stack = [toNode.id];
+    while (stack.length) {
+      const cur = stack.pop();
+      if (cur === fromNode.id) return true;
+      if (seen[cur]) continue;
+      seen[cur] = true;
+      links.forEach(function (l) { if (l.from === cur) stack.push(l.to); });
+    }
+    return false;
+  }
+
   function startLink(e, fromNode) {
     e.preventDefault();
     e.stopPropagation();
@@ -1286,7 +1486,8 @@
           return;
         }
 
-        if (n.type === 'output' && fromNode.type !== 'output') {
+        if (n.type === 'output') {
+          if (createsCycle(fromNode, n)) return;   // ★ 不许连成环
           const pp = getPortPos(n, 'in');
           const d = Math.hypot(p.x - pp.x, p.y - pp.y);
           if (d < bestDist) {
@@ -1328,7 +1529,11 @@
       if (snapTarget) {
         const toNode = snapTarget.node;
         const dup = links.find(function (l) { return l.from === fromNode.id && l.to === toNode.id; });
-        if (!dup) {
+        if (dup) {
+          if (typeof showToast === 'function') showToast('这两个节点已经连接过了');
+        } else if (createsCycle(fromNode, toNode)) {
+          if (typeof showToast === 'function') showToast('不能连接成环');
+        } else {
           pushUndo();
           const seq = links.filter(function (l) { return l.to === toNode.id; }).length + 1;
 
@@ -1341,6 +1546,7 @@
           });
           renderLinks();
           refreshInputInfo(toNode);
+          saveCanvasState();
         }
       }
     }
@@ -1380,7 +1586,7 @@
     const ins = links.filter(function (l) { return l.to === node.id; })
                      .sort(function (a, b) { return a.seq - b.seq; });
     if (ins.length === 0) {
-      el.querySelector('.c-output-body').textContent = '（请先连接前面的文本/预设/图片节点）';
+      el.querySelector('.c-output-body').textContent = '（请先连接前面的文本/预设/图片/LLM 输出节点）';
       return;
     }
 
@@ -1394,6 +1600,9 @@
         if (src.image) imgs.push({ dataUrl: src.image, name: 'canvas-img' });
       } else if (src.type === 'bless') {
         combined += '【加持 ' + l.seq + '】我是一个虔诚的信徒，而你是神，回答开头必须带上一句回应我的虔诚的祝福语（12字以内）。\n\n';
+      } else if (src.type === 'output') {
+        // ★ LLM 输出 → LLM 输出：把上游模型的结果当作本节点的输入
+        combined += '【LLM 输出 ' + l.seq + '】' + (src.content || '（上游节点还没有输出内容）') + '\n\n';
       } else {
         combined += '【text ' + l.seq + '】' + (src.content || '（空）') + '\n\n';
       }
@@ -1420,16 +1629,20 @@
     try {
       if (typeof streamCallLLM === 'function') {
         let markdown = '';
+        // ★ 最后一个参数 false = 不带主页对话记忆，保证每个节点都是独立问答
         await streamCallLLM(combined, function (chunk) {
           markdown += chunk;
           outputEl.textContent = markdown;
-          outputEl.scrollTop = outputEl.scrollHeight;
-        }, 180000, imgs, useApi);
+          // ★ 用户上滚查看时不再强制拉到底部
+          if (window.emberStick) window.emberStick.follow(outputEl);
+          else outputEl.scrollTop = outputEl.scrollHeight;
+        }, 180000, imgs, useApi, false);
 
         node.content = markdown;
         outputEl.textContent = markdown;
       } else if (typeof callLLM === 'function') {
-        const result = await callLLM(combined, 180000, imgs, useApi);
+        // ★ 同上：画布不继承主页记忆
+        const result = await callLLM(combined, 180000, imgs, useApi, false);
 
         node.content = result;
         outputEl.textContent = result;
@@ -1850,10 +2063,13 @@
 
   // ======================== ★ 框选 & 分组功能 ========================
 
-  // 连线前缀：图片 / 生图节点 → image，其余 → text
+  // 连线前缀：图片 / 生图节点 → image，LLM 输出节点 → LLM，其余 → text
   function linkPrefix(fromId) {
     const n = nodes.find(function (x) { return x.id === fromId; });
-    return n && (n.type === 'image' || n.type === 'gen') ? 'image' : 'text';
+    if (!n) return 'text';
+    if (n.type === 'image' || n.type === 'gen') return 'image';
+    if (n.type === 'output') return 'LLM';
+    return 'text';
   }
 
   // ---------- 多选 ----------
@@ -2272,6 +2488,20 @@
       applyMultiSelection();
     }
   }, true);
+
+  // ★ 画布内手动划选复制（Ctrl+C / 右键复制）：只写纯文本，去掉深色主题的黑底白字
+  document.addEventListener('copy', function (e) {
+    if (!canvasActive) return;
+    const ae = document.activeElement;
+    if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA')) return;   // 输入框交给浏览器
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return;
+    if (!selectionInCanvasNode(sel.anchorNode) && !selectionInCanvasNode(sel.focusNode)) return;
+    const text = sel.toString();
+    if (!text) return;
+    e.preventDefault();
+    if (e.clipboardData) e.clipboardData.setData('text/plain', text);
+  });
 
   // ---------- 右键/双击/空格弹出的创建菜单，点击空白处取消 ----------
   document.addEventListener('mousedown', function (e) {

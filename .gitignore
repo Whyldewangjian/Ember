@@ -39,7 +39,11 @@ diag-*
 
 # ===== 本地开发辅助脚本（不属于源码，可本地自行生成）=====
 *.bat
+*.ps1
 
 # ===== 开发过程临时文件 =====
 .write-probe.txt
 .write-probe*
+*probe*
+err*.txt
+__.tmp
