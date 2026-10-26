@@ -720,7 +720,7 @@
 
   <!-- 右下角时间 -->
   <div class="time-display">
-    <span class="app-version" title="当前版本">v 1.3.1</span>
+    <span class="app-version" id="appVersionText" title="当前版本">v 1.3.2</span>
     <span class="changelog-btn" id="changelogBtn">更新日志</span>
     <span class="changelog-btn" id="updateBtn" title="检查是否有新版本">检查更新</span>
     <i class="fas fa-clock" data-icon-key="clock"></i>
@@ -1338,6 +1338,17 @@
   <script src="js/prompt-snippets.js"></script>
 <script src="js/recharge-content.js"></script>
 <script src="js/recharge.js"></script>
+
+<!-- ★ 右下角版本号：从 package.json 读，避免以后发版只改 package.json、忘改这行 -->
+<script>
+(function () {
+  try {
+    var v = require('./package.json').version;
+    var el = document.getElementById('appVersionText');
+    if (v && el) el.textContent = 'v ' + v;
+  } catch (e) {}
+})();
+</script>
 
 
 </body>
