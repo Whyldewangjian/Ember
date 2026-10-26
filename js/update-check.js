@@ -11,7 +11,7 @@
 // 发布新版的方法（很重要，见文件末尾的说明）：
 //   1. 改 package.json 的 version
 //   2. npm run build:locked
-//   3. 在 GitHub 上创建 Release，tag 用 v1.3.1 这种格式
+//   3. 在 GitHub 上创建 Release，tag 用 v1.3.2 这种格式
 //   4. 把 dist\Ember-<版本>-locked.exe 作为 Release 附件上传
 // ============================================================================
 

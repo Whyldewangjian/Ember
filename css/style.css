@@ -3386,6 +3386,26 @@ textarea { font-size: calc(15px * var(--fs-scale, 1)); }
   min-height: 90px;
 }
 
+/* ★★ 必须把文字显示出来：
+   .fr-textarea-wrap textarea 全局设了 color: transparent / -webkit-text-fill-color: transparent，
+   那是给「生图」那个输入框用的 —— 它的文字靠上面叠加的 .fr-highlight-layer 画出来。
+   视频这边的输入框没有那一层，沿用透明就会变成「打进去的字看不见」。 */
+#vidDesc {
+  color: var(--input-text);
+  -webkit-text-fill-color: var(--input-text);
+  caret-color: var(--input-text);
+}
+#vidDesc::placeholder {
+  color: var(--placeholder);
+  -webkit-text-fill-color: var(--placeholder);
+  opacity: 1;
+}
+#vidDesc::selection {
+  background: var(--fr-mark-bg);
+  color: var(--input-text);
+  -webkit-text-fill-color: var(--input-text);
+}
+
 /* 已有参考图：放最下面，带分隔线和灰色小字说明 */
 .vid-ref-block {
   flex: none;
