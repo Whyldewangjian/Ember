@@ -3183,6 +3183,7 @@ const updateModal = document.getElementById('updateModal');
 const updateBody = document.getElementById('updateBody');
 const updateClose = document.getElementById('updateClose');
 const updateAction = document.getElementById('updateAction');
+const updateCancel = document.getElementById('updateCancel');
 
 function setUpdateText(t) { if (updateBody) updateBody.textContent = t; }
 
@@ -3251,10 +3252,62 @@ async function doCheckUpdate(manual) {
 if (updateBtn) {
   updateBtn.addEventListener('click', function () {
     if (updateModal) updateModal.classList.add('show');
+    restoreDownloadUI();     // ★ 先看是不是正在下载（窗口重开也能接上）
     doCheckUpdate(true);
   });
 }
 if (updateClose) updateClose.addEventListener('click', function () { if (updateModal) updateModal.classList.remove('show'); });
+
+// ★ 取消下载
+if (updateCancel) {
+  updateCancel.addEventListener('click', async function () {
+    if (!ipc) return;
+    updateCancel.disabled = true;
+    updateCancel.textContent = '正在取消…';
+    try { await ipc.invoke('cancel-update-download'); } catch (e) {}
+  });
+}
+
+// ★ 下载中界面：统一在这里设置，重开窗口也能恢复
+let dlUiActive = false;
+function showDownloadingUI(p) {
+  dlUiActive = true;
+  if (updateAction) {
+    updateAction.style.display = 'none';
+    updateAction.disabled = true;
+  }
+  if (updateCancel) {
+    updateCancel.style.display = '';
+    updateCancel.disabled = false;
+    updateCancel.textContent = '取消下载';
+  }
+  const pct = p.total ? Math.round(p.received / p.total * 100) : 0;
+  const spd = p.speed ? fmtSize(Math.round(p.speed)) + '/s' : '计算中…';
+  const eta = p.eta ? ('预计还需 ' + (p.eta >= 60 ? Math.floor(p.eta / 60) + ' 分 ' + (p.eta % 60) + ' 秒' : p.eta + ' 秒')) : '';
+  setUpdateText('正在下载新版本…\n\n'
+    + pct + '%   ' + fmtSize(p.received) + ' / ' + fmtSize(p.total) + '\n'
+    + '速度 ' + spd + (eta ? '    ' + eta : '')
+    + (p.threads > 1 ? '\n\n（' + p.threads + ' 线程并行下载）' : '')
+    + '\n\n完成后会自动重启，也可以点「取消下载」中止。');
+}
+function clearDownloadingUI() {
+  dlUiActive = false;
+  if (updateCancel) updateCancel.style.display = 'none';
+}
+async function restoreDownloadUI() {
+  if (!isElectron || !ipc) return;
+  try {
+    const st = await ipc.invoke('update-download-state');
+    if (st && st.ok && st.active) {
+      showDownloadingUI(st);
+      setUpdateText('（正在后台下载，已恢复进度）\n\n正在下载新版本…\n\n'
+        + Math.round(st.received / (st.total || 1) * 100) + '%   '
+        + fmtSize(st.received) + ' / ' + fmtSize(st.total) + '\n'
+        + '速度 ' + (st.speed ? fmtSize(st.speed) + '/s' : '计算中…')
+        + (st.threads > 1 ? '\n\n（' + st.threads + ' 线程并行下载）' : ''));
+    }
+  } catch (e) {}
+}
 if (updateModal) {
   updateModal.addEventListener('mousedown', function (e) {
     if (e.target === updateModal) updateModal.classList.remove('show');
@@ -3271,33 +3324,45 @@ if (updateAction) {
     }
     updateAction.disabled = true;
     updateAction.textContent = '下载中...';
-    setUpdateText('正在下载新版本，请不要关闭程序...\n\n（下载完成后程序会自动重启）');
+    updateAction.style.display = 'none';
+    showDownloadingUI({ received: 0, total: lastUpdateInfo.size || 0, speed: 0, eta: 0, threads: 0 });
 
-    // 主进程通过 update-progress 事件回报进度
+    // 主进程通过 update-progress 事件回报进度（现在广播给所有窗口）
     try {
       if (ipc && ipc.on) {
         ipc.on('update-progress', function (ev, p) {
           if (!p) return;
           if (p.stage === 'downloading') {
-            const pct = p.total ? Math.round(p.received / p.total * 100) : 0;
-            setUpdateText('正在下载新版本...\n\n' + pct + '%   ' +
-              fmtSize(p.received) + ' / ' + fmtSize(p.total) +
-              '\n\n请勿关闭程序，完成后会自动重启。');
+            showDownloadingUI(p);
+          } else if (p.stage === 'merging') {
+            setUpdateText('下载完成，正在合并文件…');
           } else if (p.stage === 'installing') {
-            setUpdateText('下载完成，正在替换文件...');
+            clearDownloadingUI();
+            setUpdateText('下载完成，正在替换文件…');
           } else if (p.stage === 'restarting') {
-            setUpdateText('更新完成，正在重启...');
+            setUpdateText('更新完成，正在重启…');
+          } else if (p.stage === 'cancelled') {
+            clearDownloadingUI();
+            updateAction.style.display = '';
+            updateAction.disabled = false;
+            updateAction.textContent = '重新下载';
+            setUpdateText('已取消下载。');
           }
         });
       }
       const r = await ipc.invoke('download-update');
+      if (r && r.cancelled) return;          // 取消已在事件里处理
       if (r && !r.ok) {
+        clearDownloadingUI();
+        updateAction.style.display = '';
         updateAction.disabled = false;
         updateAction.textContent = '重试';
         setUpdateText('更新失败：' + ((r && r.error) || '未知错误') +
           '\n\n可点击「打开发布页」手动下载。');
       }
     } catch (e) {
+      clearDownloadingUI();
+      updateAction.style.display = '';
       updateAction.disabled = false;
       updateAction.textContent = '重试';
       setUpdateText('更新失败：' + (e && e.message ? e.message : String(e)));

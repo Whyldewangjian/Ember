@@ -22,6 +22,8 @@ const os = require('os');
 const https = require('https');
 const http = require('http');
 const { spawn } = require('child_process');
+// ★ 下载器单独一个模块（不依赖 electron，可以脱离程序测试）
+const dl = require('./update-download');
 
 // ===== 你的 GitHub 仓库 =====
 const GITHUB_OWNER = 'Whyldewangjian';
@@ -134,38 +136,248 @@ function assetUrlAllowed(url) {
   } catch (e) { return false; }
 }
 
-function downloadFile(url, destPath, onProgress, redirectsLeft) {
+// ---------------------------------------------------------------- 下载（多线程分片 + 可取消）
+// 设计说明：
+//   ⚠️ 下面这一组（DL 状态 / downloadSmart / downloadPart / concatParts / probeRange）
+//     已经从 1.3.4 起废弃，实际下载走 js/update-download.js（独立模块、可单独测试）。
+//     这里保留是因为 broadcastProgress / assetUrlAllowed 等仍在使用；
+//     downloadSmart 那几个函数没有任何调用点，下次清理时可以整块删掉。
+//   · GitHub 的附件地址支持 HTTP Range，所以可以切成多段并行下载，速度能提升 1.5~4 倍
+//   · 每段先写各自的临时文件，全部下完再拼成一个文件（避免并发写同一文件的坑）
+//   · 状态放在模块变量里，渲染进程可以用 update-download-state 随时查询
+//     （以前进度只发给"点按钮时的那个窗口"，窗口重开就永远显示"下载中"）
+//   · 支持取消：cancel-update-download 会中断所有分段并清理临时文件
+const DL = {
+  active: false,
+  cancelled: false,
+  received: 0,
+  total: 0,
+  speed: 0,
+  eta: 0,
+  threads: 0,
+  startedAt: 0,
+  lastTick: 0,
+  lastBytes: 0
+};
+
+function resetDL() {
+  DL.active = false;
+  DL.cancelled = false;
+  DL.received = 0;
+  DL.total = 0;
+  DL.speed = 0;
+  DL.eta = 0;
+  DL.threads = 0;
+  DL.startedAt = 0;
+  DL.lastTick = 0;
+  DL.lastBytes = 0;
+}
+
+// 广播给所有窗口（而不是只发给发起请求的那个）
+function broadcastProgress(stage, extra) {
+  const payload = Object.assign({ stage: stage }, extra || {});
+  try {
+    const { BrowserWindow } = require('electron');
+    BrowserWindow.getAllWindows().forEach(function (w) {
+      try { if (!w.isDestroyed()) w.webContents.send('update-progress', payload); } catch (e) {}
+    });
+  } catch (e) {}
+}
+
+// 跟随重定向，拿到最终地址（顺带探测是否支持 Range）
+function probeRange(url, redirectsLeft) {
   if (redirectsLeft === undefined) redirectsLeft = 5;
   return new Promise(function (resolve, reject) {
     if (!assetUrlAllowed(url)) return reject(new Error('下载地址不在白名单内：' + url));
     const lib = url.startsWith('http:') ? http : https;
-    const req = lib.get(url, { headers: { 'User-Agent': UA }, timeout: 60000 }, function (res) {
+    const req = lib.get(url, {
+      headers: { 'User-Agent': UA, 'Range': 'bytes=0-0' },
+      timeout: 30000
+    }, function (res) {
+      // 重定向：继续跟
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         res.resume();
         if (redirectsLeft <= 0) return reject(new Error('重定向次数过多'));
-        // 重定向目标也要过白名单
-        if (!assetUrlAllowed(res.headers.location)) {
-          return reject(new Error('重定向到非白名单地址，已中止'));
-        }
-        return resolve(downloadFile(res.headers.location, destPath, onProgress, redirectsLeft - 1));
+        if (!assetUrlAllowed(res.headers.location)) return reject(new Error('重定向到非白名单地址，已中止'));
+        return resolve(probeRange(res.headers.location, redirectsLeft - 1));
       }
-      if (res.statusCode !== 200) { res.resume(); return reject(new Error('下载失败 HTTP ' + res.statusCode)); }
+      res.resume();
+      if (res.statusCode === 206) {
+        // Content-Range: bytes 0-0/85428426
+        const cr = String(res.headers['content-range'] || '');
+        const m = cr.match(/\/(\d+)\s*$/);
+        const total = m ? parseInt(m[1], 10) : parseInt(res.headers['content-length'] || '0', 10);
+        return resolve({ finalUrl: url, total: total, supportsRange: true });
+      }
+      if (res.statusCode === 200) {
+        return resolve({
+          finalUrl: url,
+          total: parseInt(res.headers['content-length'] || '0', 10),
+          supportsRange: false
+        });
+      }
+      reject(new Error('下载失败 HTTP ' + res.statusCode));
+    });
+    req.on('timeout', function () { req.destroy(new Error('探测下载地址超时')); });
+    req.on('error', reject);
+  });
+}
 
-      const total = parseInt(res.headers['content-length'] || '0', 10);
-      let got = 0;
-      const out = fs.createWriteStream(destPath);
-      res.on('data', function (chunk) {
-        got += chunk.length;
-        if (onProgress) onProgress(got, total);
-      });
+// 下载一段 [start, end] 到 partFile
+function downloadPart(url, start, end, partFile, onBytes) {
+  return new Promise(function (resolve, reject) {
+    const lib = url.startsWith('http:') ? http : https;
+    const req = lib.get(url, {
+      headers: {
+        'User-Agent': UA,
+        'Range': 'bytes=' + start + '-' + end
+      },
+      timeout: 60000
+    }, function (res) {
+      if (res.statusCode !== 206 && res.statusCode !== 200) {
+        res.resume();
+        return reject(new Error('分段下载失败 HTTP ' + res.statusCode));
+      }
+      const out = fs.createWriteStream(partFile);
+      res.on('data', function (chunk) { if (onBytes) onBytes(chunk.length); });
       res.pipe(out);
-      out.on('finish', function () { out.close(function () { resolve(destPath); }); });
+      out.on('finish', function () { out.close(function () { resolve(partFile); }); });
       out.on('error', reject);
       res.on('error', reject);
     });
-    req.on('timeout', function () { req.destroy(new Error('下载超时')); });
+    req.on('timeout', function () { req.destroy(new Error('分段下载超时')); });
     req.on('error', reject);
+    req.on('abort', function () { reject(new Error('cancelled')); });
+    // 取消时随时掐断
+    const timer = setInterval(function () {
+      if (DL.cancelled) { try { req.destroy(); } catch (e) {} }
+    }, 300);
+    req.on('close', function () { clearInterval(timer); });
   });
+}
+
+// 把多个分段文件拼成一个
+function concatParts(parts, outFile) {
+  return new Promise(function (resolve, reject) {
+    const ws = fs.createWriteStream(outFile);
+    let i = 0;
+    function next() {
+      if (i >= parts.length) { ws.end(); return; }
+      const rs = fs.createReadStream(parts[i]);
+      i++;
+      rs.pipe(ws, { end: false });
+      rs.on('end', next);
+      rs.on('error', reject);
+    }
+    ws.on('finish', function () { resolve(outFile); });
+    ws.on('error', reject);
+    next();
+  });
+}
+
+function updateSpeed() {
+  const now = Date.now();
+  if (!DL.lastTick) { DL.lastTick = now; DL.lastBytes = DL.received; return; }
+  const dt = (now - DL.lastTick) / 1000;
+  if (dt < 0.4) return;
+  const db = DL.received - DL.lastBytes;
+  const inst = db / dt;
+  // 平滑一下，避免数字乱跳
+  DL.speed = DL.speed ? (DL.speed * 0.6 + inst * 0.4) : inst;
+  DL.eta = DL.speed > 1024 ? Math.max(0, Math.round((DL.total - DL.received) / DL.speed)) : 0;
+  DL.lastTick = now;
+  DL.lastBytes = DL.received;
+}
+
+async function downloadSmart(url, destPath, expectTotal) {
+  resetDL();
+  DL.active = true;
+  DL.startedAt = Date.now();
+
+  const tmpDir = path.dirname(destPath);
+  const probe = await probeRange(url);
+  const total = probe.total || expectTotal || 0;
+  DL.total = total;
+
+  // 分段数：每 12MB 一段，最多 8 段
+  let n = total ? Math.ceil(total / (12 * 1024 * 1024)) : 1;
+  n = Math.max(1, Math.min(8, n));
+  if (!probe.supportsRange) n = 1;
+  DL.threads = n;
+
+  broadcastProgress('downloading', { received: 0, total: total, speed: 0, eta: 0, threads: n });
+
+  if (n === 1) {
+    // 单线程（服务端不支持分段时的回退）
+    const one = destPath + '.part0';
+    await downloadPart(probe.finalUrl, 0, Math.max(0, total - 1) || '', one,
+      function (len) {
+        DL.received += len;
+        updateSpeed();
+        broadcastProgress('downloading', {
+          received: DL.received, total: DL.total, speed: DL.speed, eta: DL.eta, threads: 1
+        });
+      });
+    if (DL.cancelled) throw new Error('cancelled');
+    try { fs.renameSync(one, destPath); } catch (e) { fs.copyFileSync(one, destPath); fs.unlinkSync(one); }
+    DL.active = false;
+    return destPath;
+  }
+
+  // 多段并行
+  const chunk = Math.ceil(total / n);
+  const jobs = [];
+  const parts = [];
+  for (let i = 0; i < n; i++) {
+    const start = i * chunk;
+    const end = Math.min(total - 1, start + chunk - 1);
+    const partFile = destPath + '.part' + i;
+    parts.push(partFile);
+    jobs.push(downloadPart(probe.finalUrl, start, end, partFile, function (len) {
+      DL.received += len;
+      updateSpeed();
+      broadcastProgress('downloading', {
+        received: DL.received, total: DL.total, speed: DL.speed, eta: DL.eta, threads: n
+      });
+    }));
+  }
+
+  try {
+    await Promise.all(jobs);
+  } catch (e) {
+    // 清理分段文件
+    parts.forEach(function (p) { try { fs.unlinkSync(p); } catch (err) {} });
+    DL.active = false;
+    throw (DL.cancelled ? new Error('cancelled') : e);
+  }
+
+  if (DL.cancelled) {
+    parts.forEach(function (p) { try { fs.unlinkSync(p); } catch (err) {} });
+    DL.active = false;
+    throw new Error('cancelled');
+  }
+
+  broadcastProgress('merging', { received: total, total: total });
+  await concatParts(parts, destPath);
+  parts.forEach(function (p) { try { fs.unlinkSync(p); } catch (err) {} });
+
+  // 校验大小（防止分段缺斤少两）
+  try {
+    const st = fs.statSync(destPath);
+    if (total && st.size !== total) throw new Error('下载文件大小不符（' + st.size + ' / ' + total + '）');
+  } catch (e) {
+    if (e && e.message && e.message.indexOf('大小不符') >= 0) { DL.active = false; throw e; }
+  }
+
+  DL.active = false;
+  DL.speed = 0;
+  DL.eta = 0;
+  return destPath;
+}
+
+// 兼容旧名字（其它地方可能引用）
+function downloadFile(url, destPath, onProgress, redirectsLeft) {
+  return downloadSmart(url, destPath, 0);
 }
 
 // ---------------------------------------------------------------- IPC
@@ -218,19 +430,30 @@ function registerUpdateIPC() {
       const newExe = path.join(tmpDir, 'Ember-update.exe');
 
       const send = function (stage, extra) {
-        try {
-          if (!event.sender.isDestroyed()) {
-            event.sender.send('update-progress', Object.assign({ stage: stage }, extra || {}));
-          }
-        } catch (e) {}
+        broadcastProgress(stage, extra);
       };
 
-      send('downloading', { received: 0, total: asset.size || 0 });
-      await downloadFile(asset.browser_download_url, newExe, function (got, total) {
-        send('downloading', { received: got, total: total || asset.size || 0 });
-      });
+      // ★ 用独立下载模块（多线程 + 可取消 + 速度统计），进度广播给所有窗口
+      broadcastProgress('downloading', { received: 0, total: asset.size || 0, threads: 0, speed: 0, eta: 0 });
+      try {
+        await dl.download(asset.browser_download_url, newExe, {
+          total: asset.size || 0,
+          onProgress: function (p) {
+            broadcastProgress(p.stage === 'merging' ? 'merging' : 'downloading', {
+              received: p.received, total: p.total,
+              speed: p.speed, eta: p.eta, threads: p.threads
+            });
+          }
+        });
+      } catch (dlErr) {
+        if (dlErr && dlErr.message === 'cancelled') {
+          broadcastProgress('cancelled', {});
+          return { ok: false, cancelled: true, error: '已取消下载' };
+        }
+        throw dlErr;
+      }
 
-      send('installing');
+      broadcastProgress('installing', {});
 
       if (!portable) {
         // ---------- 安装版：静默运行新版安装程序，它会覆盖旧文件并自动启动 ----------
@@ -273,6 +496,16 @@ function registerUpdateIPC() {
       if (url && /^https:\/\/github\.com\//.test(url)) shell.openExternal(url);
       return { ok: true };
     } catch (e) { return { ok: false }; }
+  });
+
+  // ★ 查询当前下载状态：窗口重开/重进弹窗时用它恢复真实进度
+  ipcMain.handle('update-download-state', async function () {
+    return Object.assign({ ok: true }, dl.snapshot());
+  });
+
+  // ★ 取消下载
+  ipcMain.handle('cancel-update-download', async function () {
+    return dl.cancel();
   });
 }
 
