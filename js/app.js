@@ -99,6 +99,8 @@ const CONV_KEY = 'llm_conv_history';
 const CONV_MAX = 40;
 
 let pendingImages = [];
+// ★ 参考图数量上限：每张图约 1600 输入 token，图越多越慢、越容易被服务商掐断
+const MAX_REF_IMAGES = 5;
 
 // ======================== 主题系统 ========================
 const THEMES = {
@@ -1417,7 +1419,10 @@ function processBgFile(file) {
       const dataUrl = reader.result;
       const img = new Image();
       img.onload = () => {
-        const MAX_W = 1920, MAX_H = 1080;
+        // ★ 参考图压缩上限：Claude 本身会把长边缩到 1568px，再大也没用，
+        //   反而让每张图多吃 ~1600 token、整个请求体积膨胀（大请求容易被中转站掐断）。
+        //   降到 1280×720 后，体积少一大半，看图效果基本无差别。
+        const MAX_W = 1280, MAX_H = 720;
         let w = img.width, h = img.height;
         if (w <= MAX_W && h <= MAX_H) { resolve(dataUrl); return; }
         const ratio = Math.min(MAX_W / w, MAX_H / h);
@@ -1523,6 +1528,12 @@ async function addImage(file) {
   if (!file) return;
   if (!currentApi.vision) { showToast('当前模型不支持看图，请切换视觉模型'); return; }
   if (!file.type.startsWith('image/')) { showToast('请选择图片文件'); return; }
+  // ★ 参考图数量上限：图越多，输入 token 涨得越快（每张约 1600），
+  //   请求体积也越大，模型容易处理到一半断掉，所以从源头限制。
+  if (pendingImages.length >= MAX_REF_IMAGES) {
+    showToast('参考图最多 ' + MAX_REF_IMAGES + ' 张，再多会影响生成质量、也容易中断');
+    return;
+  }
   if (file.size > 10 * 1024 * 1024) { showToast('图片过大，请选择 10MB 以内的图片'); return; }
   try {
     const dataUrl = await processBgFile(file);
@@ -1898,26 +1909,125 @@ function loadHistory() {
     if (!Array.isArray(historyList)) historyList = [];
   } catch (e) { historyList = []; }
 }
-function saveHistory(input1Text, input2Text, markdown) {
-  const rec = { id: 'h_' + Date.now() + '_' + Math.random().toString(36).substr(2, 4), time: new Date().toLocaleString('zh-CN', { hour12: false }), input1: input1Text, input2: input2Text, output: markdown };
+// ★ type: 'img' | 'video' —— 生图和视频的历史分开记、分开显示，避免互相串台
+//   fields: 表单快照（下拉框/勾选框的值），点「载入」时还原
+function saveHistory(input1Text, input2Text, markdown, type, fields) {
+  const rec = {
+    id: 'h_' + Date.now() + '_' + Math.random().toString(36).substr(2, 4),
+    time: new Date().toLocaleString('zh-CN', { hour12: false }),
+    type: type || 'img',
+    input1: input1Text, input2: input2Text, output: markdown,
+    fields: fields || null
+  };
   historyList.unshift(rec);
   if (historyList.length > HISTORY_MAX) historyList.length = HISTORY_MAX;
-  localStorage.setItem(HISTORY_KEY, JSON.stringify(historyList));
+  try { localStorage.setItem(HISTORY_KEY, JSON.stringify(historyList)); } catch (e) {}
   renderHistoryList();
 }
+
+// 当前在哪个提示词模式
+function currentHomeType() {
+  return (homeTypeSel && homeTypeSel.value === 'video') ? 'video' : 'img';
+}
+
+// 生图表单快照
+function imgSnapshot() {
+  return {
+    style: homeVal(optStyle), shot: homeVal(optShot), angle: homeVal(optAngle),
+    place: homeVal(optPlace), time: homeVal(optTime), light: homeVal(optLight),
+    lang: homeLang
+  };
+}
+
+// 视频表单快照
+function vidSnapshot() {
+  const g = function (id) { const el = document.getElementById(id); return el ? el.value : ''; };
+  const chk = document.getElementById('vidNoAudio');
+  return {
+    mode: vidMode,
+    dur: g('vidDur'), ratio: g('vidRatio'),
+    shot: g('vidShot'), angle: g('vidAngle'), light: g('vidLight'), motion: g('vidMotion'),
+    place: g('vidPlace'), time: g('vidTime'), style: g('vidStyle'),
+    totalDur: g('vidTotalDur'), shotCount: g('vidShotCount'), ratio2: g('vidRatio2'),
+    story: g('vidStory'), langCat: g('vidLangCat'), langItem: g('vidLangItem'),
+    place2: g('vidPlace2'), time2: g('vidTime2'), style2: g('vidStyle2'),
+    noAudio: !!(chk && chk.checked),
+    desc: g('vidDesc'), refs: g('vidRefs')
+  };
+}
+
+// 点「载入」：按记录类型还原到对应模式
+function loadHistoryRecord(rec) {
+  const type = rec.type || 'img';
+  if (homeTypeSel && homeTypeSel.value !== type) {
+    homeTypeSel.value = type;
+    try { applyHomeType(); } catch (e) {}
+  }
+  const f = rec.fields || {};
+
+  if (type === 'video') {
+    // 先恢复镜头模式（单/多镜头），否则后面那些字段是隐藏的
+    if (f.mode && f.mode !== vidMode) {
+      const seg = document.getElementById('vidModeSeg');
+      const btn = seg ? seg.querySelector('button[data-mode="' + f.mode + '"]') : null;
+      if (btn) btn.click();
+    }
+    const setV = function (id, v) { const el = document.getElementById(id); if (el && v != null) el.value = v; };
+    setV('vidDur', f.dur); setV('vidRatio', f.ratio);
+    setV('vidShot', f.shot); setV('vidAngle', f.angle); setV('vidLight', f.light);
+    setV('vidMotion', f.motion); setV('vidPlace', f.place); setV('vidTime', f.time);
+    setV('vidStyle', f.style);
+    setV('vidTotalDur', f.totalDur); setV('vidShotCount', f.shotCount); setV('vidRatio2', f.ratio2);
+    setV('vidStory', f.story); setV('vidPlace2', f.place2); setV('vidTime2', f.time2);
+    setV('vidStyle2', f.style2); setV('vidRefs', f.refs);
+    // 镜头语言两级联动：先选大类，再选细分
+    const catEl = document.getElementById('vidLangCat');
+    const itemEl = document.getElementById('vidLangItem');
+    if (catEl) {
+      catEl.value = f.langCat || '';
+      if (catEl.onchange) catEl.onchange();
+      if (itemEl) itemEl.value = f.langItem || '';
+    }
+    const chk = document.getElementById('vidNoAudio');
+    if (chk) chk.checked = !!f.noAudio;
+    const ta = document.getElementById('vidDesc');
+    if (ta) ta.value = rec.input1 || '';
+    showPlainResult(rec.output);            // 视频是原样文本，不能渲染 markdown
+  } else {
+    input1.value = rec.input1 || '';
+    input2.value = rec.input2 || '';
+    if (optStyle) optStyle.value = f.style || '';
+    if (optShot) optShot.value = f.shot || '';
+    if (optAngle) optAngle.value = f.angle || '';
+    if (optPlace) optPlace.value = f.place || '';
+    if (optTime) optTime.value = f.time || '';
+    if (optLight) optLight.value = f.light || '';
+    [optStyle, optShot, optAngle, optLight].forEach(function (s) { syncAiDefault(s); });
+    syncAllHighlights();
+    showMarkdownResult(rec.output);
+  }
+  closeHistoryPanel();
+}
+
 function renderHistoryList() {
   if (!historyListEl) return;
   historyListEl.innerHTML = '';
-  if (historyList.length === 0) {
-    historyListEl.innerHTML = '<div class="history-empty"><i class="fas fa-inbox" style="font-size:32px;color:var(--text-dim);margin-bottom:10px;"></i><br>暂无历史记录</div>';
+  // ★ 只显示当前模式的历史：视频模式看不到生图记录，反之亦然
+  const curType = currentHomeType();
+  const list = historyList.filter(function (r) { return (r.type || 'img') === curType; });
+  if (list.length === 0) {
+    historyListEl.innerHTML = '<div class="history-empty"><i class="fas fa-inbox" style="font-size:32px;color:var(--text-dim);margin-bottom:10px;"></i><br>'
+      + (curType === 'video' ? '还没有视频提示词记录' : '还没有生图提示词记录') + '</div>';
     return;
   }
-  historyList.forEach(rec => {
+  list.forEach(rec => {
     const item = document.createElement('div');
     item.className = 'history-item';
+    const previewSrc = (rec.input1 || rec.input2 || rec.output || '').replace(/\s+/g, ' ').trim();
+    const preview = previewSrc.length > 42 ? previewSrc.slice(0, 42) + '…' : (previewSrc || '(空)');
     item.innerHTML = `
       <div class="history-item-time">${escapeHtml(rec.time)}</div>
-      <div class="history-item-preview">${escapeHtml(rec.input1 || rec.input2 || '(空提问)')}</div>
+      <div class="history-item-preview">${escapeHtml(preview)}</div>
       <div class="history-item-actions">
         <button class="history-copy-btn" title="复制内容"><i class="far fa-copy"></i></button>
         <button class="history-load-btn" title="载入到界面"><i class="fas fa-undo"></i></button>
@@ -1925,20 +2035,17 @@ function renderHistoryList() {
       </div>`;
     item.querySelector('.history-copy-btn').addEventListener('click', function (e) {
       e.stopPropagation();
-      copyTextToClipboard(markdownToPlainText(rec.output)).then(ok => { if (ok) showToast('✅ 已复制到剪贴板'); else showToast('❌ 复制失败'); });
+      const txt = ((rec.type || 'img') === 'video') ? (rec.output || '') : markdownToPlainText(rec.output);
+      copyTextToClipboard(txt).then(ok => { if (ok) showToast('✅ 已复制到剪贴板'); else showToast('❌ 复制失败'); });
     });
     item.querySelector('.history-load-btn').addEventListener('click', function (e) {
       e.stopPropagation();
-      input1.value = rec.input1 || '';
-      input2.value = rec.input2 || '';
-      syncAllHighlights();
-      showMarkdownResult(rec.output);
-      closeHistoryPanel();
+      loadHistoryRecord(rec);
     });
     item.querySelector('.history-del-btn').addEventListener('click', function (e) {
       e.stopPropagation();
       historyList = historyList.filter(h => h.id !== rec.id);
-      localStorage.setItem(HISTORY_KEY, JSON.stringify(historyList));
+      try { localStorage.setItem(HISTORY_KEY, JSON.stringify(historyList)); } catch (e2) {}
       renderHistoryList();
     });
     historyListEl.appendChild(item);
@@ -2012,9 +2119,12 @@ historyBtn.addEventListener('click', openHistoryPanel);
 historyCloseBtn.addEventListener('click', closeHistoryPanel);
 historyOverlay.addEventListener('click', function (e) { if (e.target === historyOverlay) closeHistoryPanel(); });
 historyClearBtn.addEventListener('click', async function () {
-  if (!(await showConfirm('确定清空所有历史记录吗？', { danger: true }))) return;
-  historyList = [];
-  localStorage.removeItem(HISTORY_KEY);
+  // ★ 只清空「当前模式」的历史（面板里看到的那些），另一种模式的记录保留
+  const curType = currentHomeType();
+  const label = (curType === 'video') ? '视频提示词' : '生图提示词';
+  if (!(await showConfirm('确定清空「' + label + '」的历史记录吗？', { danger: true }))) return;
+  historyList = historyList.filter(function (r) { return (r.type || 'img') !== curType; });
+  try { localStorage.setItem(HISTORY_KEY, JSON.stringify(historyList)); } catch (e) {}
   renderHistoryList();
 });
 
@@ -2716,16 +2826,30 @@ runBtn.addEventListener('click', async function () {
         if (!outputMetaFirst) outputMetaFirst = performance.now(); vMd += chunk;
         output.textContent = vMd;
         window.emberStick.follow(output);
-      }, 180000, pendingImages, null, false);   // ★ 最后两个参数：不指定模型 / 不带历史记忆
+      }, 360000, pendingImages, null, false);   // ★ 最后两个参数：不指定模型 / 不带历史记忆
       showPlainResult(vMd); showOutputMeta(vMd, vCombined, outputMetaT0, outputMetaFirst);
+      // ★ 视频提示词也要进历史（以前这里完全没存，所以视频模式的历史永远是空的）
+      {
+        const gv = function (id) { const el = document.getElementById(id); return el ? String(el.value || '').trim() : ''; };
+        const head = (vidMode === 'single') ? gv('vidDesc') : (gv('vidStory') || gv('vidDesc'));
+        saveHistory(head, '', vMd, 'video', vidSnapshot());
+      }
       rememberTurn(vCombined, vMd);
       setStatus('green', '请求成功');
       playDoneSound();
     } catch (err) {
       if (err.name === 'AbortError') {
-        if (vMd) { showPlainResult(vMd); showOutputMeta(vMd, vCombined, outputMetaT0, outputMetaFirst); }
-        else { output.innerHTML = '<div class="empty-state"><i class="fas fa-stop-circle"></i><p>请求已停止</p></div>'; }
-        setStatus('yellow', '请求已停止');
+        if (vMd) {
+          showPlainResult(vMd); showOutputMeta(vMd, vCombined, outputMetaT0, outputMetaFirst);
+          {   // 中断前已经生成了一部分 → 也存进历史，别让用户白等
+            const gv2 = function (id) { const el = document.getElementById(id); return el ? String(el.value || '').trim() : ''; };
+            const head2 = (vidMode === 'single') ? gv2('vidDesc') : (gv2('vidStory') || gv2('vidDesc'));
+            saveHistory(head2, '', vMd, 'video', vidSnapshot());
+          }
+        }
+        else { output.innerHTML = '<div class="empty-state"><i class="fas fa-stop-circle"></i><p>生成中断了</p>'
+          + '<p style="font-size:12px;opacity:.7;margin-top:6px;">常见原因：参考图太多（建议 5 张以内）、要求写得太长，或网络/服务商断开。</p></div>'; }
+        setStatus('yellow', '生成中断');
       } else {
         output.innerHTML = '<div class="empty-state"><i class="fas fa-exclamation-circle"></i><p>' +
           (err && err.message ? err.message : '请求失败') + '</p></div>';
@@ -2781,10 +2905,10 @@ runBtn.addEventListener('click', async function () {
       if (!outputMetaFirst) outputMetaFirst = performance.now(); markdown += chunk;
       output.textContent = markdown;
       window.emberStick.follow(output);   // ★ 用户上滚时不抢滚动条
-    }, 180000, pendingImages, null, false);   // ★ 不带历史记忆：每次生成都是全新的，不参考上一次结果
+    }, 360000, pendingImages, null, false);   // ★ 不带历史记忆：每次生成都是全新的，不参考上一次结果
     showMarkdownResult(markdown); showOutputMeta(markdown, combined, outputMetaT0, outputMetaFirst);
 
-    saveHistory(text1, text2, markdown);
+    saveHistory(text1, text2, markdown, 'img', imgSnapshot());
     rememberTurn(combined, markdown);
     setStatus('green', '请求成功');
     playDoneSound();
@@ -2793,28 +2917,30 @@ runBtn.addEventListener('click', async function () {
       if (markdown) {
         showMarkdownResult(markdown); showOutputMeta(markdown, combined, outputMetaT0, outputMetaFirst);
 
-        saveHistory(text1, text2, markdown);
+        saveHistory(text1, text2, markdown, 'img', imgSnapshot());
         rememberTurn(combined, markdown);
       } else {
         output.classList.remove('md-body');
-        output.innerHTML = '<div class="empty-state"><i class="fas fa-stop-circle"></i><p>请求已停止</p></div>';
+        output.innerHTML = '<div class="empty-state"><i class="fas fa-stop-circle"></i><p>生成中断了</p>'
+          + '<p style="font-size:12px;opacity:.7;margin-top:6px;">常见原因：参考图太多（建议 5 张以内）、要求写得太长，或网络/服务商断开。</p></div>';
       }
-      setStatus('yellow', '请求已停止');
+      setStatus('yellow', '生成中断');
       copyBtn.style.display = markdown ? 'flex' : 'none';
       saveResultBtn.style.display = markdown ? 'flex' : 'none';
     } else {
       try {
-        const result = await callLLM(combined, 180000, pendingImages);
+        const result = await callLLM(combined, 360000, pendingImages);
         showMarkdownResult(result); showOutputMeta(result, combined, outputMetaT0, outputMetaFirst);
-        saveHistory(text1, text2, result);
+        saveHistory(text1, text2, result, 'img', imgSnapshot());
         rememberTurn(combined, result);
         setStatus('green', '请求成功');
         playDoneSound();
       } catch (err2) {
         if (err2.name === 'AbortError') {
           output.classList.remove('md-body');
-          output.innerHTML = '<div class="empty-state"><i class="fas fa-stop-circle"></i><p>请求已停止</p></div>';
-          setStatus('yellow', '请求已停止');
+          output.innerHTML = '<div class="empty-state"><i class="fas fa-stop-circle"></i><p>生成中断了</p>'
+            + '<p style="font-size:12px;opacity:.7;margin-top:6px;">常见原因：参考图太多（建议 5 张以内）、要求写得太长，或网络/服务商断开。</p></div>';
+          setStatus('yellow', '生成中断');
         } else {
           const errMsg = err2.message || '';
           output.classList.remove('md-body');
@@ -2847,7 +2973,22 @@ stopBtn.addEventListener('click', function () {
 });
 
 // ======================== 流式调用 LLM ========================
-async function streamCallLLM(prompt, onDelta, timeoutMs = 180000, images = [], apiOverride, useMemory) {
+// ★ 输出长度上限：不传 max_tokens 时，输出长度完全由服务端默认值决定。
+//   中转站/部分服务商默认值很小（4096 之类），长内容就会"写到一半停住"，
+//   表现为"生成一半断掉"。这里显式给一个足够大的值。
+//   · 图像类模型 / 不支持该参数的服务 → 返回 null，保持原样（不传）
+//   · OpenAI 新版推理模型要求用 max_completion_tokens 这个名字
+function maxTokensField(model) {
+  const m = String(model || '').toLowerCase();
+  if (!m) return null;
+  if (/image|dall|flux|seedream|nano-banana|midjourney|stable-diffusion|sdxl|kolors/.test(m)) return null;
+  if (/^(gpt-5|o1|o3|o4|o5)/.test(m) || /(^|-)o1(-|$)|(^|-)o3(-|$)|(^|-)o4(-|$)/.test(m)) {
+    return { max_completion_tokens: 8192 };
+  }
+  return { max_tokens: 8192 };
+}
+
+async function streamCallLLM(prompt, onDelta, timeoutMs = 360000, images = [], apiOverride, useMemory) {
   const A = apiOverride || currentApi;          // ★ 允许调用方指定模型（画布节点用）
   if (!A.key) throw new Error('请在设置中填写 API Key');
   // ★★ 关键修复：每个请求用【自己的】控制器，并让超时定时器只中止自己。
@@ -2865,7 +3006,9 @@ async function streamCallLLM(prompt, onDelta, timeoutMs = 180000, images = [], a
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + A.key },
-      body: JSON.stringify({ model: A.model, messages: msgs, temperature: 0.7, stream: true }),
+      body: JSON.stringify(Object.assign({
+        model: A.model, messages: msgs, temperature: 0.7, stream: true
+      }, maxTokensField(A.model))),
       signal: myController.signal
     });
     if (!response.ok) { const errText = await response.text(); throw new Error(`HTTP ${response.status}: ${errText}`); }
@@ -2943,7 +3086,7 @@ async function streamCallLLM(prompt, onDelta, timeoutMs = 180000, images = [], a
 
 
 // ======================== 非流式调用 LLM ========================
-async function callLLM(prompt, timeoutMs = 180000, images = [], apiOverride, useMemory) {
+async function callLLM(prompt, timeoutMs = 360000, images = [], apiOverride, useMemory) {
   const A = apiOverride || currentApi;          // ★ 同上
   if (!A.key) throw new Error('请在设置中填写 API Key');
   // ★ 同上：每个请求用自己的控制器，超时只中止自己
@@ -2958,7 +3101,9 @@ async function callLLM(prompt, timeoutMs = 180000, images = [], apiOverride, use
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + A.key },
-      body: JSON.stringify({ model: A.model, messages: msgs, temperature: 0.7 }),
+      body: JSON.stringify(Object.assign({
+        model: A.model, messages: msgs, temperature: 0.7
+      }, maxTokensField(A.model))),
       signal: myController.signal
     });
     if (!response.ok) { const errText = await response.text(); throw new Error(`HTTP ${response.status}: ${errText}`); }
