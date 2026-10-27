@@ -10,6 +10,24 @@ const updateModule = require('./js/update-check');
 const githubAuthModule = require('./js/github-auth');
 
 let mainWin = null;
+
+// ======================== ★ 单实例锁（只对打包后的正式版生效） ========================
+// 为什么需要：
+//   两个 Ember 同时跑会抢同一个 Chromium 用户数据目录（Local Storage\leveldb），
+//   后启动的那个拿不到数据库锁 → 界面全空 → 用户以为"数据丢了"。
+//   所以正式版只允许一个实例：第二次双击不新开窗口，而是把已有窗口唤到最前。
+//   开发版（npm start）不加锁，方便同时开几个对比测试。
+const SINGLE_INSTANCE_OK = app.isPackaged ? app.requestSingleInstanceLock() : true;
+if (!SINGLE_INSTANCE_OK) {
+  app.quit();
+} else {
+  app.on('second-instance', function () {
+    if (!mainWin || mainWin.isDestroyed()) return;
+    try { if (mainWin.isMinimized()) mainWin.restore(); } catch (e) {}
+    try { mainWin.show(); } catch (e) {}
+    try { mainWin.focus(); } catch (e) {}
+  });
+}
 let userPinned = false;   // 用户手动置顶状态
 let inputActive = false;  // 输入框是否聚焦（聚焦时禁止自动缩回标签）
 
@@ -416,6 +434,8 @@ app.on('web-contents-created', function (e, contents) {
 
 
 app.whenReady().then(() => {
+  // ★ 没拿到单实例锁（已有实例在跑）→ 什么都不做，让进程安静退出
+  if (!SINGLE_INSTANCE_OK) return;
   createWindow();
   browserModule.registerBrowserIPC();
   browserModule.setupDownloadManager();
