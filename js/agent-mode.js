@@ -315,6 +315,25 @@
       const extName = (docFile.match(/\.([a-z0-9]+)$/i) || [])[1] || 'file';
       row.appendChild(mk('doc', docFile, 'fa-file-lines', '打开 ' + extName, 'ag-run-exe'));
     }
+    // ★ 发布到网页：整文件夹上传（多文件工程也能发）
+    if (htmlFile) {
+      const pubBtn = document.createElement('button');
+      pubBtn.className = 'ag-run-btn ag-run-publish';
+      pubBtn.innerHTML = '<i class="fas fa-cloud-arrow-up"></i> 发布到网页';
+      pubBtn.addEventListener('click', function () {
+        if (!window.EmberPublish || typeof window.EmberPublish.publishFolder !== 'function') {
+          setStatus('发布模块没加载，请重启 Ember');
+          return;
+        }
+        const pathMod = require('path');
+        window.EmberPublish.publishFolder({
+          rootAbs: pathMod.dirname(htmlFile),
+          entryFile: htmlFile,
+          title: pathMod.basename(pathMod.dirname(htmlFile))
+        });
+      });
+      row.appendChild(pubBtn);
+    }
     return row;
   }
 

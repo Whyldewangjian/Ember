@@ -7,6 +7,7 @@ const docParse = require('./js/doc-parse');
 const docBuild = require('./js/doc-build');
 const browserModule = require('./js/browser-window');
 const updateModule = require('./js/update-check');
+const githubAuthModule = require('./js/github-auth');
 
 let mainWin = null;
 let userPinned = false;   // 用户手动置顶状态
@@ -321,7 +322,9 @@ function createWindow() {
     icon: path.join(__dirname, 'build', 'icon.ico'),
     webPreferences: {
       nodeIntegration: true,
-      contextIsolation: false
+      contextIsolation: false,
+      // ★ 正式版彻底禁用开发者工具（开发时仍可用，方便调试）
+      devTools: !app.isPackaged
     }
   });
 
@@ -338,14 +341,37 @@ function createWindow() {
 
   mainWin.loadFile(path.join(__dirname, 'index.html'));
   startMainTimer();
-    // ★ F12 打开开发者工具（调试用）
+
+  // ★ 开发者工具：只在【开发时】可用，打包后的正式版彻底关掉
+  //   （正式版能开 F12 等于把源码和内部逻辑敞开给任何人看）
+  if (app.isPackaged) {
+    mainWin.webContents.on('before-input-event', function (event, input) {
+      const k = input.key || '';
+      // F12 / Ctrl+Shift+I / Ctrl+Shift+J / Ctrl+U（查看源码）
+      const isDevKey = (input.type === 'keyDown') && (
+        k === 'F12'
+        || (input.control && input.shift && /^[iIjJcC]$/.test(k))
+        || (input.control && /^[uU]$/.test(k))
+      );
+      if (isDevKey) {
+        event.preventDefault();
+        return;
+      }
+    });
+    // 关掉菜单里可能残留的开发者工具项
+    mainWin.webContents.on('devtools-opened', function () {
+      try { mainWin.webContents.closeDevTools(); } catch (e) {}
+    });
+  } else {
+    // 开发时保留 F12，方便调试
     mainWin.webContents.on('before-input-event', function (event, input) {
       if (input.type === 'keyDown' && input.key === 'F12') {
         mainWin.webContents.toggleDevTools();
         event.preventDefault();
       }
     });
-  
+  }
+
 }
 // ======================== ★ 全局右键菜单（编辑：复制 / 粘贴 / 剪切 / 全选） ========================
 app.on('web-contents-created', function (e, contents) {
@@ -394,6 +420,7 @@ app.whenReady().then(() => {
   browserModule.registerBrowserIPC();
   browserModule.setupDownloadManager();
   updateModule.registerUpdateIPC();
+  githubAuthModule.registerGithubAuthIPC();
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });

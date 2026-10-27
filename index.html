@@ -631,6 +631,48 @@
             </div>
           </div>
 
+          <!-- ★ 发布到网页（GitHub 授权） -->
+          <div class="collapse-group mt-15" id="publishCollapseGroup">
+            <div class="collapse-header" id="publishCollapseHeader">
+              <span><i class="fas fa-globe" data-icon-key="web"></i> 发布到网页</span>
+              <i class="fas fa-chevron-down collapse-arrow"></i>
+            </div>
+            <div class="collapse-body" id="publishCollapseBody">
+
+              <div class="gh-pub-status" id="ghPubStatus">
+                <i class="fas fa-circle-notch fa-spin"></i> 检查连接状态…
+              </div>
+
+              <div class="gh-pub-row">
+                <button class="gh-pub-btn" id="ghPubConnect"><i class="fab fa-github"></i> 连接 GitHub</button>
+                <button class="gh-pub-btn ghost" id="ghPubDisconnect" style="display:none;"><i class="fas fa-link-slash"></i> 断开</button>
+              </div>
+
+              <div class="gh-pub-row">
+                <button class="gh-pub-btn ghost" id="ghPubFolder"><i class="fas fa-folder-open"></i> 选择文件夹发布</button>
+              </div>
+              <div class="color-hint" style="margin-bottom:8px;">
+                已经生成过、但对话清空了？直接选那个游戏文件夹就能发布。
+              </div>
+
+              <div class="color-hint">
+                连接之后，生成的游戏可以一键发布成手机能打开的网页。<br>
+                游戏放在你自己的 GitHub 账号下，随时可以断开。
+              </div>
+
+              <div class="gh-pub-list-wrap">
+                <div class="gh-pub-list-title">
+                  已发布的游戏
+                  <button class="gh-pub-sync" id="ghPubSync" title="从 GitHub 把已经发布过的游戏同步到列表">
+                    <i class="fas fa-rotate"></i> 同步
+                  </button>
+                </div>
+                <div class="gh-pub-list" id="ghPubList"></div>
+              </div>
+
+            </div>
+          </div>
+
           <div class="tip-box">
             <i class="fas fa-info-circle"></i>
             修改后点击"保存设置"才会永久生效
@@ -739,6 +781,50 @@
       <div class="recharge-body" id="rechargeBody"></div>
       <div class="modal-footer">
         <button class="cancel-btn" id="rechargeClose"><i class="fas fa-times"></i> 关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ★ 发布到网页：GitHub 设备码授权弹窗 -->
+  <div class="modal-overlay" id="ghAuthModal">
+    <div class="modal glass-modal gh-auth-modal">
+      <div class="modal-header">
+        <h2><i class="fab fa-github"></i> 连接 GitHub</h2>
+      </div>
+      <div class="gh-auth-body" id="ghAuthBody"></div>
+      <div class="modal-footer">
+        <button class="cancel-btn" id="ghAuthCancel"><i class="fas fa-times"></i> 取消</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ★ 发布成功：显示网址 -->
+  <div class="modal-overlay" id="ghResultModal">
+    <div class="modal glass-modal gh-auth-modal">
+      <div class="modal-header">
+        <h2><i class="fas fa-circle-check"></i> 发布成功</h2>
+      </div>
+      <div class="gh-auth-body" id="ghResultBody"></div>
+      <div class="modal-footer">
+        <button class="cancel-btn" id="ghResultClose"><i class="fas fa-times"></i> 关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ★ 发布进行中：实时进度 -->
+  <div class="modal-overlay" id="ghProgressModal">
+    <div class="modal glass-modal gh-auth-modal gh-prog-modal">
+      <div class="modal-header">
+        <h2><i class="fas fa-cloud-arrow-up"></i> 正在发布到网页</h2>
+      </div>
+      <div class="gh-auth-body">
+        <div class="gh-prog-main">
+          <i class="fas fa-circle-notch fa-spin gh-prog-spin"></i>
+          <div class="gh-prog-text" id="ghProgText">准备中…</div>
+        </div>
+        <div class="gh-prog-bar"><div class="gh-prog-fill" id="ghProgFill"></div></div>
+        <div class="gh-prog-elapsed" id="ghProgElapsed">已用 0 秒</div>
+        <div class="gh-prog-hint">首次发布会打开网页托管，通常需要 1~2 分钟，请不要关闭 Ember。</div>
       </div>
     </div>
   </div>
@@ -1131,6 +1217,7 @@
 
           <button id="wsSaveBtn"><i class="fas fa-save"></i> 保存为文件</button>
           <button id="wsPackBtn"><i class="fas fa-box-open"></i> 打包为应用</button>
+          <button id="wsPublishBtn" title="发布成手机能打开的网页"><i class="fas fa-globe"></i> 发布到网页</button>
         </div>
       </div>
     </div>
@@ -1338,6 +1425,7 @@
   <script src="js/prompt-snippets.js"></script>
 <script src="js/recharge-content.js"></script>
 <script src="js/recharge.js"></script>
+<script src="js/publish.js"></script>
 
 <!-- ★ 右下角版本号：从 package.json 读，避免以后发版只改 package.json、忘改这行 -->
 <script>

@@ -135,6 +135,7 @@
   const reviseStatusEl = document.getElementById('wsReviseStatus');
   // ★ 打包
   const packBtn = document.getElementById('wsPackBtn');
+  const publishBtn = document.getElementById('wsPublishBtn');
   const portableCb = document.getElementById('wsPortable');
 
   const EXT_MAP = { html: 'html', js: 'js', python: 'py', css: 'css' };
@@ -1123,6 +1124,10 @@ contextBridge.exposeInMainWorld('emberWin', {
   function openFolder(dir) {
     try { require('child_process').exec('explorer "' + dir + '"'); } catch (e) {}
   }
+
+  // ★ 发布到网页：按钮的点击逻辑已统一放到 js/publish.js 里绑定
+  //   （放在工坊模块里曾经出现"点了完全没反应"——绑定依赖模块内部变量，
+  //    一旦模块初始化出错就静默失效。改到 publish.js 后只依赖 DOM id，更可靠）
 
   if (packBtn) {
     packBtn.addEventListener('click', async function () {

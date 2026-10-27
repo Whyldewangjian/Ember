@@ -1072,6 +1072,13 @@
   color: var(--accent);
 }
 .ag-run-exe:hover { background: var(--accent-soft, rgba(62,207,142,.12)); filter: none; }
+/* 发布到网页：和「打开页面」区分开，用描边+图标强调 */
+.ag-run-publish {
+  background: transparent;
+  border: 1px solid var(--accent);
+  color: var(--accent);
+}
+.ag-run-publish:hover { background: var(--accent-soft, rgba(62,207,142,.12)); filter: none; }
 .ag-done-warn {
   background: linear-gradient(135deg, rgba(224, 82, 82, 0.22), rgba(224, 82, 82, 0.08));
   border-color: rgba(224, 82, 82, 0.60);
