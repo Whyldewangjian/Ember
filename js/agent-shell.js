@@ -36,8 +36,40 @@ const DENY = [
   /\brm\s+-rf\s+\/(\s|$)/i,
   /\bdel\s+\/[a-z]*\s*\/[a-z]*\s+[a-z]:\\?\s*$/i,
   /\brd\s+\/s\s+\/q\s+[a-z]:\\?\s*$/i,
-  /\bremove-item\s+.*-recurse.*[a-z]:\\?\s*$/i
+  /\bremove-item\s+.*-recurse.*[a-z]:\\?\s*$/i,
+  // ★ 管道式清除：Get-ChildItem ... | Remove-Item -Recurse
+  //   这个写法会把"列出来的所有东西"全删掉，一旦路径写错就是灾难，
+  //   而且用户没法在中间确认。一律拒绝，让它改用 delete 工具逐个删（会进待确认队列）。
+  /get-childitem[^\r\n|]*\|\s*(remove-item|del\b|ri\b|rm\b)/i,
+  /gci[^\r\n|]*\|\s*(remove-item|del\b|ri\b|rm\b)/i,
+  /dir[^\r\n|]*\|\s*(remove-item|del\b|ri\b|rm\b)/i
 ];
+
+// 工作文件夹根路径（由 main.js 注入）。删到根就是删"用户的地盘"，直接拒绝。
+let rootsGetter = null;
+function setRootsGetter(fn) { rootsGetter = fn; }
+function hitsRoot(cmd) {
+  try {
+    if (!rootsGetter || !(rootsGetter() || []).length) return '';
+    const s = String(cmd || '');
+    const isDelete = /remove-item|\bdel\b|\brd\b|\bri\b|\brm\b/i.test(s);
+    const isRecursive = /-recurse|-r\b|\/s/i.test(s);
+    if (!isDelete) return '';
+    const roots = rootsGetter() || [];
+    for (let i = 0; i < roots.length; i++) {
+      const r = String(roots[i]).replace(/[\\/]+$/, '');
+      if (!r) continue;
+      const esc = r.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      // 只拦两种：① 删的就是根路径本身（后面紧跟引号/空白/结尾）
+      //            ② 删根目录下的通配（D:\X\*）
+      // 不拦 D:\X\old 这种删子项的写法。
+      const reSelf = new RegExp(esc + "['\"]?(\\s|$)", 'i');
+      const reWild = new RegExp(esc + "['\"]?[\\\\/]\\*", 'i');
+      if (reSelf.test(s) || reWild.test(s)) return r;
+    }
+  } catch (e) {}
+  return '';
+}
 
 function pushOut(s) {
   outBuf += s;
@@ -89,7 +121,19 @@ function dangerous(cmd) {
 function run(cmd, waitSec) {
   const c = String(cmd || '');
   if (c && dangerous(c)) {
-    return { ok: false, denied: true, error: '这条命令可能造成不可逆的破坏，已拒绝执行：' + c };
+    return {
+      ok: false, denied: true,
+      error: '这条命令可能造成不可逆的破坏，已拒绝执行：' + c,
+      hint: '要删文件请改用 delete 工具（会进待确认队列，用户能看到并确认）。'
+    };
+  }
+  const rootHit = c ? hitsRoot(c) : '';
+  if (rootHit) {
+    return {
+      ok: false, denied: true,
+      error: '拒绝递归删除工作文件夹根目录：' + rootHit,
+      hint: '可以在根目录「里面」删具体文件或子文件夹，但不能删掉工作文件夹本身。'
+    };
   }
   if (!isRunning()) {
     const s = start(currentCwd || os.homedir());
@@ -107,12 +151,24 @@ function run(cmd, waitSec) {
   return new Promise((resolve) => {
     setTimeout(() => {
       const output = outBuf;
+      // ★ 把明显的失败行挑出来单独返回。
+      //   否则模型容易只看"命令跑完了"就总结成"已全部完成"，而实际有项目没删掉/没写成。
+      const failed = [];
+      const lines = output.split(/\r?\n/);
+      for (let i = 0; i < lines.length; i++) {
+        const l = lines[i];
+        if (!l.trim()) continue;
+        if (/无法删除|cannot (be )?remove|being used by another process|正在被另一进程使用|拒绝访问|access is denied|access denied|could not find|does not exist|不是内部或外部命令|is not recognized|error:|错误:|exception|失败/i.test(l)) {
+          if (failed.length < 12) failed.push(l.trim().slice(0, 200));
+        }
+      }
       resolve({
         ok: true,
         running: isRunning(),
         cwd: currentCwd,
         output: output.length > 12000 ? ('…（只显示最后 12000 字）\n' + output.slice(-12000)) : output,
-        truncated: output.length > 12000
+        truncated: output.length > 12000,
+        failed: failed
       });
     }, ms);
   });
@@ -133,4 +189,4 @@ function registerShellIPC() {
   });
 }
 
-module.exports = { registerShellIPC, start, run, stop };
+module.exports = { registerShellIPC, start, run, stop, setRootsGetter };

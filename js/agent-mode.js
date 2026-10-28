@@ -1462,7 +1462,10 @@
       description: '在常驻 PowerShell 里执行命令，返回这段等待时间内的输出。'
         + '适合：npm install、npm run build、跑测试、起本地服务器、看长日志。'
         + '命令在第一个工作文件夹里执行。明显的毁灭性命令会被拒绝。'
-        + '想只看后面新产生的输出（比如服务器日志），把 cmd 留空、wait 设大一点再调一次。',
+        + '想只看后面新产生的输出（比如服务器日志），把 cmd 留空、wait 设大一点再调一次。'
+        + '注意：删文件不要用 shell（Get-ChildItem | Remove-Item 这种会被拒绝），'
+        + '请用 delete 工具，它会让用户确认。'
+        + '如果返回里带"失败行"，说明有操作没成功，报告时必须逐条说明，不许说"已全部完成"。',
       parameters: {
         type: 'object',
         properties: {
@@ -2425,9 +2428,18 @@
       }
       const body = rep && rep.ok
         ? ('输出：\n' + (String(rep.output || '').trim() || '(没有输出)')
+          + (rep.failed && rep.failed.length
+            ? ('\n\n★ 命令里有失败行（' + rep.failed.length + ' 条）：\n  ' + rep.failed.join('\n  ')
+              + '\n这些操作没有成功。报告时必须逐条说清哪一项失败了、原因是什么，'
+              + '绝对不许说"已全部完成/已全部删除"。')
+            : '')
           + (rep.running ? '' : '\n（shell 已退出，下次调用会自动重启）'))
-        : ('[失败] ' + ((rep && rep.error) || '未知错误'));
-      if (currentBubble) addActivity(currentBubble, rep && rep.ok ? '✅ 命令已执行' : '⚠ 命令失败');
+        : ('[失败' + (rep && rep.denied ? '：已拒绝' : '') + '] ' + ((rep && rep.error) || '未知错误')
+          + (rep && rep.hint ? '\n提示：' + rep.hint : ''));
+      if (currentBubble) {
+        if (rep && rep.failed && rep.failed.length) addActivity(currentBubble, '⚠ 有 ' + rep.failed.length + ' 项操作失败');
+        addActivity(currentBubble, rep && rep.ok ? '✅ 命令已执行' : '⛔ 命令被拒绝');
+      }
       pushAssistant();
       msgs.push({
         role: 'user',

@@ -445,6 +445,8 @@ app.whenReady().then(() => {
   githubAuthModule.registerGithubAuthIPC();
   pageCheckModule.registerPageCheckIPC();   // ★ 让 Agent 能"看到"网页跑起来的结果
   agentShellModule.registerShellIPC();      // ★ 给 Agent 一个常驻 PowerShell（装依赖/构建/看长日志）
+  // 把工作文件夹交给 shell 模块，用来拦住"递归删到工作文件夹根目录"这种命令
+  agentShellModule.setRootsGetter(function () { return agentRoots || []; });
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
