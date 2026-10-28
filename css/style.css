@@ -3927,3 +3927,38 @@ textarea { font-size: calc(15px * var(--fs-scale, 1)); }
 }
 .rc-footer-tip i { color: var(--accent); margin-right: 4px; }
 
+/* ★ Agent 气泡里的生图缩略图 */
+.ag-img-preview {
+  display: block;
+  margin-top: 8px;
+  max-width: 220px;
+  max-height: 220px;
+  border-radius: 8px;
+  border: 1px solid var(--card-border);
+  image-rendering: pixelated;      /* 像素图别糊 */
+  cursor: zoom-in;
+  transition: transform .12s ease, border-color .12s ease;
+}
+.ag-img-preview:hover {
+  transform: scale(1.03);
+  border-color: var(--accent);
+}
+
+   /* ======================== Agent 顶部：模型 + 生图 双下拉 ========================
+   一行里塞两个下拉，所以宽度要收着点；窗窄时先牺牲那句装饰性提示。 */
+#agentMode .ag-model-sel { max-width: 170px; }
+#agentMode .ag-image-sel { max-width: 150px; }
+#agentMode .model-select-label { margin-left: 2px; }
+/* 窗口不够宽时隐藏「选择工作文件夹…」这句装饰文字；
+   它是唯一带 margin-right:auto 的推力元素，藏掉之后下拉会黏到标题后面，
+   所以同时把这份推力交给「模型」标签。 */
+@media (max-width: 1200px) {
+  #agentMode .canvas-tips { display: none; }
+  #agentMode .ag-model-label { margin-left: auto; }
+}
+@media (max-width: 980px) {
+  #agentMode .ag-model-sel { max-width: 130px; }
+  #agentMode .ag-image-sel { max-width: 110px; }
+}
+
+

@@ -466,6 +466,15 @@
     var txt = await res.text();
     var json = null;
     try { json = txt ? JSON.parse(txt) : null; } catch (e) {}
+    // ★ 401 = 令牌失效（被吊销 / 过期 / 用户改过密码）。
+    //   顺手清掉本地令牌，界面立刻显示「未连接」，用户不会再反复点发布无效重试。
+    if (res.status === 401) {
+      try {
+        localStorage.removeItem(TOKEN_KEY);
+        localStorage.removeItem(USER_KEY);
+        if (window.EmberGitHub && window.EmberGitHub.refreshStatus) window.EmberGitHub.refreshStatus();
+      } catch (e) {}
+    }
     return { ok: res.ok, status: res.status, json: json, text: txt };
   }
 
@@ -505,6 +514,18 @@
     return r.ok ? { ok: true } : { ok: false, error: ((r.json && r.json.message) || ('HTTP ' + r.status)) };
   }
 
+  // 放一个 .nojekyll：关掉 GitHub Pages 的 Jekyll 处理。
+  // 不加的话 Jekyll 会去"编译"我们上传的 HTML/JS，遇到 Liquid 语法（{{ }}、{% %}）
+  // 或者奇怪文件名就报错，表现就是「部署失败 / 站点生成失败」，但文件其实都传上去了。
+  async function ensureNoJekyll(user, branch) {
+    var probe = await gh('/repos/' + user + '/' + REPO + '/contents/.nojekyll?ref=' + branch);
+    if (probe.ok) return;   // 已经有了
+    await gh('/repos/' + user + '/' + REPO + '/contents/.nojekyll', {
+      method: 'PUT',
+      body: { message: 'add .nojekyll', content: toBase64('\n'), branch: branch }
+    });
+  }
+
   // 打开 Pages（已开过会返回 409，视为成功）；created 表示这次是"刚开启"
   async function ensurePages(user, branch, onStep) {
     if (onStep) onStep('正在打开网页托管…');
@@ -525,7 +546,16 @@
       var r = await gh('/repos/' + user + '/' + REPO + '/pages/builds/latest');
       if (r.ok && r.json) {
         if (r.json.status === 'built') return { ok: true, built: true };
-        if (r.json.status === 'errored') return { ok: false, error: '部署失败：' + (r.json.error && r.json.error.message || '未知原因') };
+        if (r.json.status === 'errored') {
+          // ★ 站点"构建报告失败"并不代表游戏没发上去：文件已经 commit 了。
+          //   实测过：报告 errored 的同时，链接照样能打开（GitHub 的构建状态常有滞后/误报）。
+          //   所以这里只当作"还没构建好"处理，不让整次发布变成失败。
+          return {
+            ok: true,
+            built: false,
+            buildError: (r.json.error && r.json.error.message) || '未知原因'
+          };
+        }
       }
       if (onStep) onStep('正在生成网页…（首次发布通常要 1~2 分钟）');
       await new Promise(function (s) { setTimeout(s, 5000); });
@@ -558,6 +588,7 @@
 
     var pg = await ensurePages(user, rp.branch, onStep);
     if (!pg.ok) return pg;
+    try { await ensureNoJekyll(user, rp.branch); } catch (e) {}
 
     var wb = await waitBuild(user, onStep);
     if (!wb.ok) return wb;
@@ -570,7 +601,8 @@
       repo: REPO,
       title: opts.title || dir,
       firstTime: !!pg.created,
-      pending: !wb.built          // true = 还在生成，让用户等一下再打开
+      pending: !wb.built,         // true = 还在生成，让用户等一下再打开
+      buildError: wb.buildError || ''   // 站点构建报了错（文件仍已上传）
     };
   }
 
@@ -584,6 +616,7 @@
       if (typeof showToast === 'function') showToast('已发布：' + r.url);
       return;
     }
+    if (typeof setResultTitle === 'function') setResultTitle(true);   // ★ 复位成"发布成功"
     b.innerHTML =
       '<div class="gh-code-tip">用手机扫码，或直接打开这个网址：</div>'
       + '<div class="gh-qr-wrap"><img class="gh-qr" alt="二维码" '
@@ -595,7 +628,10 @@
       + (r.pending || r.firstTime
           ? '<div class="gh-wait-tip"><i class="fas fa-clock"></i> '
             + (r.firstTime ? '第一次发布要生成站点，' : '')
-            + '如果现在打开是 404 或空白，<b>等 1~2 分钟再刷新</b>就好了。</div>'
+            + '如果现在打开是 404 或空白，<b>等 1~2 分钟再刷新</b>就好了。'
+            + (r.buildError ? '<br>（站点构建报告：' + escapeHtml(String(r.buildError).slice(0, 80))
+              + ' —— 文件已经传上去了，一般过一会儿会自动生效。）' : '')
+            + '</div>'
           : '')
       + '<div class="gh-code-actions">'
       + '  <button class="gh-pub-btn" id="ghResultOpen"><i class="fas fa-up-right-from-square"></i> 在电脑上打开</button>'
@@ -623,6 +659,18 @@
   }
 
   // 发布失败也用弹窗说清楚（toast 一闪就没了，用户容易以为"没反应"）
+  function setResultTitle(ok) {
+    var t = document.getElementById('ghResultTitle');
+    if (!t) return;
+    if (ok) {
+      t.innerHTML = '<i class="fas fa-circle-check"></i> 发布成功';
+      t.style.color = '';
+    } else {
+      t.innerHTML = '<i class="fas fa-triangle-exclamation"></i> 发布失败';
+      t.style.color = '#ff8a80';
+    }
+  }
+
   function showError(msg) {
     var m = document.getElementById('ghResultModal');
     var b = document.getElementById('ghResultBody');
@@ -630,12 +678,18 @@
       if (typeof showToast === 'function') showToast('发布失败：' + msg);
       return;
     }
+    setResultTitle(false);
+    // ★ 授权失效是最常见的一种失败：给准确指引，并把本地失效的令牌清掉，
+    //   否则用户会一直点、一直失败，还以为是网络问题。
+    var expired = /bad credentials|401|unauthorized/i.test(String(msg || ''));
+    var hint = expired
+      ? 'GitHub 授权已经失效（令牌被吊销或过期）。打开「设置 → 发布到网页」，点「断开」再点「连接 GitHub」重新授权一次即可。'
+      : '如果提示连不上 GitHub，请先开代理；如果提示权限不足，去设置里断开后重新连接一次。';
     b.innerHTML = '<div class="gh-auth-err"><i class="fas fa-triangle-exclamation"></i> '
-      + '发布失败</div>'
+      + (expired ? '授权失效' : '发布失败') + '</div>'
       + '<div class="gh-url-box" style="color:#ff8a80;border-color:rgba(255,138,128,.35);">'
       + escapeHtml(String(msg || '未知原因')) + '</div>'
-      + '<div class="gh-code-status">如果提示连不上 GitHub，请先开代理；'
-      + '如果提示权限不足，去设置里断开后重新连接一次。</div>';
+      + '<div class="gh-code-status">' + hint + '</div>';
     m.classList.add('show');
     var close = document.getElementById('ghResultClose');
     if (close) close.addEventListener('click', function () { m.classList.remove('show'); });

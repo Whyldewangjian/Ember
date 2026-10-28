@@ -21,6 +21,7 @@
   let lastUserText = '';   // 本轮用户的原始指令（判断"这是改文件还是写内容"用）
   let currentBubble = null;// 当前 Agent 气泡
   let gameSession = false; // 本轮是不是「做游戏」需求（决定是否顺带复制 phaser.min.js）
+  let scriptOkThisTurn = false; // 本轮脚本是否成功执行过（用于"脚本改了文件"的兜底识别）
 
   let ipc = null;
   try { ipc = require('electron').ipcRenderer; } catch (e) {}
@@ -56,6 +57,65 @@
   }
   window.__syncAgentModelSelect = renderModelSelect;
 
+  // ---------- 生图模型下拉（推理模型负责写代码，生图模型负责画概念图）----------
+  const imageModelSelect = document.getElementById('agImageModelSelect');
+  const isImageModelName = function (m) {
+    return /image|dall|flux|seedream|nano-banana|midjourney|stable-diffusion|sdxl|kolors/i.test(String(m || ''));
+  };
+  function imageApiList() {
+    const list = (typeof apis !== 'undefined' && Array.isArray(apis)) ? apis : [];
+    return list.filter(function (a) { return isImageModelName(a.model); });
+  }
+  function currentImageApiId() {
+    const p = currentProject ? currentProject() : null;
+    let id = p && p.imageApiId;
+    if (!id) {
+      // 没选过 → 用生图页当前那个模型兜底；再没有就用第一个可用的
+      try { id = localStorage.getItem('llm_home_active_api_id') || ''; } catch (e) {}
+      if (!id || !imageApiList().some(function (a) { return a.id === id; })) {
+        const first = imageApiList()[0];
+        id = first ? first.id : '';
+      }
+    }
+    return id;
+  }
+  function renderImageModelSelect() {
+    if (!imageModelSelect) return;
+    const list = imageApiList();
+    imageModelSelect.innerHTML = '';
+    if (!list.length) {
+      const opt = document.createElement('option');
+      opt.value = '';
+      opt.textContent = '未配置';
+      imageModelSelect.appendChild(opt);
+      imageModelSelect.title = '还没有生图模型：到「设置 → API 管理」添加一个（如 nano-banana-lite）';
+      return;
+    }
+    const cur = currentImageApiId();
+    list.forEach(function (a) {
+      const opt = document.createElement('option');
+      opt.value = a.id;
+      opt.textContent = a.model || '';
+      if (a.id === cur) opt.selected = true;
+      imageModelSelect.appendChild(opt);
+    });
+    imageModelSelect.title = '生图模型：负责画概念图';
+  }
+  if (imageModelSelect) {
+    imageModelSelect.addEventListener('change', function () {
+      const id = this.value;
+      const p = currentProject ? currentProject() : null;
+      if (p) { p.imageApiId = id; saveProjects(); }
+    });
+  }
+  // 供 generate-image 之类的工具取用
+  window.agentImageApi = function () {
+    const id = currentImageApiId();
+    if (!id) return null;
+    const list = (typeof apis !== 'undefined' && Array.isArray(apis)) ? apis : [];
+    return list.filter(function (a) { return a.id === id; })[0] || null;
+  };
+
   // ---------- 模式切换 ----------
   function enter() {
     if (active) return;
@@ -73,10 +133,14 @@
     btn.classList.add('active');
     mode.style.display = 'flex';
     renderModelSelect();
+    renderImageModelSelect();
     loadPresets();
     renderPresetSelect();
     loadProjects();          // ★ 载入项目（含旧数据迁移）；内部会填充 roots / history / 预设
     refreshList();
+    // ★ 如果切走时这一轮还在跑，切回来要把状态提示补上
+    //   （进度气泡本身没被重绘，因为 applyProject 里做了 running 判断）
+    if (running) setStatus(lastStatusText || '正在运行…');
     if (typeof checkApiStatus === 'function') checkApiStatus('agent');
   }
   function exit() {
@@ -175,7 +239,55 @@
     s = String(s == null ? '' : s);
     return s.length > n ? s.slice(0, n) + '\n…（截断）' : s;
   }
-  function setStatus(msg) { if (agStatus) agStatus.textContent = msg || ''; }
+
+  // ★ 把本地图片变成"模型真的能看见"的图片消息
+  //   缘由：模型能看图，但它没有手去打开文件——必须由程序把像素塞进请求体。
+  //   顺带按长边缩小到 maxDim，像素图的色块缩小后信息损失很小，token 却省一大半。
+  function imagePartFromFile(absPath, maxDim) {
+    maxDim = maxDim || 768;
+    return new Promise(function (resolve) {
+      let dataUrl = '';
+      try {
+        const fsMod = require('fs');
+        const buf = fsMod.readFileSync(absPath);
+        if (buf.length > 12 * 1024 * 1024) return resolve({ error: '图片太大（' + Math.round(buf.length / 1024 / 1024) + ' MB），超过 12MB 不读。' });
+        const ext = String(absPath).toLowerCase().match(/\.(\w+)$/);
+        const mime = ext && /^(png)$/.test(ext[1]) ? 'image/png'
+          : ext && /^(jpe?g)$/.test(ext[1]) ? 'image/jpeg'
+            : ext && /^(webp)$/.test(ext[1]) ? 'image/webp'
+              : ext && /^(gif)$/.test(ext[1]) ? 'image/gif' : 'image/png';
+        dataUrl = 'data:' + mime + ';base64,' + buf.toString('base64');
+      } catch (e) {
+        return resolve({ error: '读图片失败：' + (e.message || e) });
+      }
+      const img = new Image();
+      img.onload = function () {
+        try {
+          const w0 = img.naturalWidth || img.width;
+          const h0 = img.naturalHeight || img.height;
+          const scale = Math.min(1, maxDim / Math.max(w0, h0));
+          if (scale >= 1) return resolve({ url: dataUrl, w: w0, h: h0, scaled: false });
+          const w = Math.max(1, Math.round(w0 * scale));
+          const h = Math.max(1, Math.round(h0 * scale));
+          const cv = document.createElement('canvas');
+          cv.width = w; cv.height = h;
+          const ctx = cv.getContext('2d');
+          ctx.imageSmoothingEnabled = false;   // 像素图不能糊
+          ctx.drawImage(img, 0, 0, w, h);
+          resolve({ url: cv.toDataURL('image/png'), w: w, h: h, scaled: true, from: w0 + '×' + h0 });
+        } catch (e) {
+          resolve({ url: dataUrl, w: 0, h: 0, scaled: false });   // 缩不了就用原图
+        }
+      };
+      img.onerror = function () { resolve({ error: '这个文件不是能解码的图片（扩展名和内容可能不一致）。' }); };
+      img.src = dataUrl;
+    });
+  }
+  let lastStatusText = '';   // ★ 记住最后一次状态文字，切页面回来能恢复
+  function setStatus(msg) {
+    lastStatusText = msg || '';
+    if (agStatus) agStatus.textContent = msg || '';
+  }
   function relOf(abs) {
     if (!abs) return '';
     const np = pathMod ? pathMod.normalize(String(abs)) : String(abs);
@@ -229,11 +341,33 @@
     setThinking(b, true);
     return b;
   }
+  // ★ 思考指示器带计时：让人一眼看出"还在等"而不是"死了"
+  let thinkingTimer = null;
+  let thinkingStart = 0;
+  function stopThinkingTimer() {
+    if (thinkingTimer) { clearInterval(thinkingTimer); thinkingTimer = null; }
+  }
   function setThinking(bubble, on) {
     let el = bubble.querySelector('.ag-thinking');
     if (on) {
-      if (!el) { el = document.createElement('span'); el.className = 'ag-thinking'; el.textContent = '思考中…'; bubble.appendChild(el); }
-    } else if (el) el.remove();
+      if (!el) {
+        el = document.createElement('span');
+        el.className = 'ag-thinking';
+        bubble.appendChild(el);
+      }
+      thinkingStart = Date.now();
+      const tick = function () {
+        const s = Math.round((Date.now() - thinkingStart) / 1000);
+        if (!el) return;
+        el.textContent = '思考中…（已等 ' + s + ' 秒）';
+      };
+      tick();
+      stopThinkingTimer();
+      thinkingTimer = setInterval(tick, 1000);
+    } else {
+      stopThinkingTimer();
+      if (el) el.remove();
+    }
     scrollChat();
   }
   function addActivity(bubble, text) {
@@ -284,6 +418,15 @@
         return jsDirs.indexOf(d) >= 0;
       });
       if (hit) htmlFile = hit.abs;
+    }
+    // ★ 兜底：本轮跑过脚本，但提案队列是空的（脚本改的文件不进队列）——
+    //   这时只要工作文件夹里有 index.html，就给「打开页面 / 发布到网页」
+    if (!htmlFile && scriptOkThisTurn) {
+      const idxs = (entries || []).filter(function (e) { return /index\.html$/i.test(String(e.abs || '')); });
+      if (idxs.length) {
+        idxs.sort(function (a, b) { return String(a.abs).length - String(b.abs).length; });
+        htmlFile = idxs[0].abs;
+      }
     }
     return { html: htmlFile, exe: exeFile, doc: docFile };
   }
@@ -599,6 +742,7 @@
       ? history.slice(history.length - AGENT_HISTORY_MAX)
       : history;
     p.presetId = activePresetId || '';
+    try { p.imageApiId = currentImageApiId(); } catch (e) {}   // ★ 生图模型按项目保存
     saveProjects();
   }
 
@@ -613,7 +757,8 @@
             name: p.name || '未命名项目',
             roots: Array.isArray(p.roots) ? p.roots : [],
             history: Array.isArray(p.history) ? p.history : [],
-            presetId: p.presetId || ''
+            presetId: p.presetId || '',
+            imageApiId: p.imageApiId || ''   // ★ 每个项目记住自己用的生图模型
           };
         });
         const saved = localStorage.getItem(ACTIVE_PROJECT_KEY) || '';
@@ -651,8 +796,12 @@
     try { renderProposals(); } catch (e) {}
     renderProjectSelect();
     renderPresetSelect();
+    try { renderImageModelSelect(); } catch (e) {}   // ★ 生图模型跟着项目走
     renderRoots();
-    renderHistory();
+    // ★ 正在跑的时候不要重绘对话：
+    //   本轮还没写进 history，重绘会把「思考中 / 正在写入…」这个活气泡整块丢掉，
+    //   用户切一次页面再回来就只看到前面几轮的总结，误以为已经结束了。
+    if (!running) renderHistory();
     refreshList();
   }
 
@@ -893,12 +1042,22 @@
     if (!ipc) { setStatus('无法访问文件系统'); return; }
     const r = await ipc.invoke('agent-pick-folders');
     if (!r || !r.ok) { if (!(r && r.canceled)) setStatus('选择失败'); return; }
+    // ★ 新加的文件夹默认「自动执行」：否则做十个改动要点十次「应用」，节奏全断。
+    //   想改成每次询问，点文件夹卡片上的图标即可。
+    let addedAuto = 0;
     r.folders.forEach(function (f) {
-      if (!roots.some(function (x) { return x.path === f.path; })) roots.push(f);
+      if (!roots.some(function (x) { return x.path === f.path; })) {
+        f.auto = true;
+        addedAuto++;
+        roots.push(f);
+      }
     });
     saveRoots();
     renderRoots();
     await refreshList();
+    if (addedAuto && typeof showToast === 'function') {
+      showToast('已添加 ' + addedAuto + ' 个文件夹，默认「自动执行」；点卡片上的图标可改回每次询问');
+    }
   }
   async function refreshList() {
     if (!ipc) return;
@@ -1185,6 +1344,18 @@
       else if (p.kind === 'rename') r = await ipc.invoke('agent-rename', p.abs, p.to);
       if (r && r.ok) okCount++;
       else { failCount++; if (currentBubble) addActivity(currentBubble, '✗ ' + p.kind + ' ' + p.rel + '：' + ((r && r.error) || '失败')); }
+
+      // ★ 应用提案时也要补齐 Phaser 库。
+      //   之前只有"自动执行"那条路径会复制，而平时你都是点「应用」—— 于是库一直没放进去，
+      //   打开游戏就报 "Phaser is not defined"。两条写入路径必须都覆盖。
+      if (r && r.ok && /\.html?$/i.test(p.abs) && /phaser/i.test(String(payload || ''))) {
+        try {
+          const cp = await ipc.invoke('game-copy-phaser', p.abs);
+          if (cp && cp.ok && currentBubble) {
+            addActivity(currentBubble, '📦 已把 phaser.min.js 放进同目录（断网可玩）');
+          }
+        } catch (e) {}
+      }
     }
     proposals = proposals.filter(function (p, idx) { return checked.indexOf(idx) < 0; });
     renderProposals();
@@ -1206,47 +1377,119 @@
     { type: 'function', function: { name: 'rename', description: '重命名 / 移动文件', parameters: { type: 'object', properties: { from: { type: 'string' }, to: { type: 'string' } }, required: ['from', 'to'] } } },
     { type: 'function', function: { name: 'create-xlsx', description: '生成 Excel(.xlsx)', parameters: { type: 'object', properties: { path: { type: 'string' }, sheets: { type: 'object', description: '工作表数组 [{name, rows:[[...]]}]' } }, required: ['path', 'sheets'] } } },
     { type: 'function', function: { name: 'pack-exe', description: '把 HTML 打包成可运行 exe', parameters: { type: 'object', properties: { path: { type: 'string', description: 'index.html 绝对路径' }, name: { type: 'string' } }, required: ['path'] } } },
-    { type: 'function', function: { name: 'run-node', description: '执行一个 Node 脚本（可生成 pptx、处理文件等）', parameters: { type: 'object', properties: { path: { type: 'string', description: '脚本绝对路径' } }, required: ['path'] } } }
+    { type: 'function', function: { name: 'run-node', description: '执行一个 Node 脚本（可生成 pptx、处理文件等）', parameters: { type: 'object', properties: { path: { type: 'string', description: '脚本绝对路径' } }, required: ['path'] } } },
+    // ★ 生图：画概念图 / 贴图，直接存进工作文件夹（用哪个接口、怎么落盘由程序处理）
+    { type: 'function', function: {
+      name: 'generate-image',
+      description: '生成一张图片并保存到工作文件夹的 concept/ 目录。'
+        + '做游戏 PRD 时用它出概念图：主角、场景、色板/UI 各一张通常够，需求复杂就多调几次。'
+        + '图片只用来表达"风格和配色"，不要从里面切素材——'
+        + '游戏里的角色和场景应该由你写代码（像素数组 / graphics）画出来。',
+      parameters: {
+        type: 'object',
+        properties: {
+          prompt: { type: 'string', description: '图片描述：主体、风格、配色、光线，写具体一些' },
+          name: { type: 'string', description: '文件名（不含扩展名），如 01-hero、02-scene、03-palette' },
+          dir: { type: 'string', description: '存到哪个工作文件夹（默认第一个）' },
+          look: { type: 'boolean', description: '是否把成品回传给模型看一眼（当前模型支持看图才用 true）' }
+        },
+        required: ['prompt']
+      }
+    } },
+    // ★ 页面自检：让模型能"看到"自己做出来的网页有没有报错、白不白屏
+    { type: 'function', function: {
+      name: 'check-page',
+      description: '在后台打开一个本地 HTML 页面，检查它是否正常运行：'
+        + '捕获 console 错误、载入失败、白屏、页面上显示的错误提示，并报告画布数量和标题。'
+        + '写完或改完游戏页面后必须调用一次；如果报告有错误，先修文件再重新调用，直到通过。',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: '要检查的 HTML 文件绝对路径' }
+        },
+        required: ['path']
+      }
+    } },
+    // ★ 计划/待办：让模型先把步骤列出来，用户能看见它在按计划推进
+    { type: 'function', function: {
+      name: 'plan',
+      description: '把任务拆成步骤并显示进度。复杂的任务（5 步以上）开始前先调用一次，列出全部步骤；'
+        + '每完成一步再调用一次，把已完成步骤的序号放进 done。步骤要具体可验证，不要写"优化代码"这种空话。',
+      parameters: {
+        type: 'object',
+        properties: {
+          steps: { type: 'array', items: { type: 'string' }, description: '步骤列表，按执行顺序' },
+          done: { type: 'array', items: { type: 'integer' }, description: '已完成的步骤序号（从 1 开始）' }
+        },
+        required: ['steps']
+      }
+    } },
   ];
 
   async function callAgent(messages) {
     const A = (typeof window.apiFor === 'function') ? window.apiFor('agent') : (typeof currentApi !== 'undefined' ? currentApi : null);
     if (!A || !A.key) throw new Error('请先在设置中配置 API Key');
     const base = (A.url || '').replace(/\/+$/, '');
-    abortCtl = new AbortController();
-    // ★ 看门狗：接口长时间不返回时主动中断，避免界面永远停在「思考中」
-    const watchdog = setTimeout(function () {
-      try { abortCtl.abort(); } catch (e) {}
-    }, 480000);   // 8 分钟：推理模型 + 大上下文（读整本书）时 4 分钟不够
-    let res = null, lastErr = null;
     const body = JSON.stringify({ model: A.model, messages: messages, temperature: 0.3, stream: false, tools: AGENT_TOOLS, tool_choice: 'auto' });
-    // ★ 网络抖动自动重试：Failed to fetch / 连接重置 / 5xx / 429 都再试，最多 3 次
-    for (let attempt = 1; attempt <= 3; attempt++) {
+
+    let res = null, lastErr = null;
+    let watchdogFired = false;
+    let userStopped = false;
+
+    // 一轮请求：带看门狗 + 网络抖动重试（5xx / 429 / 连接重置）
+    async function attemptOnce() {
+      abortCtl = new AbortController();
+      // ★ 看门狗：正常情况首字节来得很快，长时间没动静基本是连接死了。
+      //   以前是 8 分钟，用户干等太久；现在 3 分钟中断并自动重试一次。
+      const watchdog = setTimeout(function () {
+        watchdogFired = true;
+        try { abortCtl.abort(); } catch (e) {}
+      }, 180000);
       try {
-        res = await fetch(base + '/chat/completions', {
-          method: 'POST',
-          signal: abortCtl.signal,
-          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + A.key },
-          body: body
-        });
-        lastErr = null;
-        if (res.ok || (res.status !== 429 && res.status < 500)) break;
-        // 5xx / 429：读掉响应体后重试
-        try { await res.text(); } catch (e2) {}
-        res = null;
-        if (attempt < 3) await new Promise(function (r) { setTimeout(r, 1000 * attempt); });
-      } catch (e) {
-        lastErr = e;
-        if (e && (e.name === 'AbortError' || /abort/i.test(e.message || ''))) break;   // 超时不重试
-        const netErr = /failed to fetch|networkerror|econnreset|socket hang up|fetch failed|undici|network/i.test((e.message || '') + ' ' + (e.name || ''));
-        if (!netErr || attempt === 3) break;
-        await new Promise(function (r) { setTimeout(r, 1000 * attempt); });
+        for (let attempt = 1; attempt <= 3; attempt++) {
+          try {
+            res = await fetch(base + '/chat/completions', {
+              method: 'POST',
+              signal: abortCtl.signal,
+              headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + A.key },
+              body: body
+            });
+            lastErr = null;
+            if (res.ok || (res.status !== 429 && res.status < 500)) break;
+            // 5xx / 429：读掉响应体后重试
+            try { await res.text(); } catch (e2) {}
+            res = null;
+            if (attempt < 3) await new Promise(function (r) { setTimeout(r, 1000 * attempt); });
+          } catch (e) {
+            lastErr = e;
+            if (e && (e.name === 'AbortError' || /abort/i.test(e.message || ''))) {
+              if (!watchdogFired) userStopped = true;   // 用户点的「停止」
+              break;
+            }
+            const netErr = /failed to fetch|networkerror|econnreset|socket hang up|fetch failed|undici|network/i.test((e.message || '') + ' ' + (e.name || ''));
+            if (!netErr || attempt === 3) break;
+            await new Promise(function (r) { setTimeout(r, 1000 * attempt); });
+          }
+        }
+      } finally {
+        clearTimeout(watchdog);
       }
     }
-    clearTimeout(watchdog);
+
+    await attemptOnce();
+
+    // ★ 看门狗超时 → 自动再来一次（换新连接），不要直接判死
+    if (!res && watchdogFired && !userStopped) {
+      watchdogFired = false;
+      try { setStatus('连接超时，正在自动重试一次…'); } catch (e) {}
+      await attemptOnce();
+    }
     if (!res) {
       if (lastErr && (lastErr.name === 'AbortError' || /abort/i.test(lastErr.message || ''))) {
-        throw new Error('请求超时（8 分钟无响应），已自动中断。可重试，或换一个更快的模型。');
+        if (userStopped) throw new Error('已停止。');
+        throw new Error('请求超时（3 分钟没有任何响应，已自动重试过一次）。'
+          + '可能是这个模型或中转站太慢、卡住了。建议换一个更快的模型再试（例如 gemini / 豆包），'
+          + '或者把需求拆小一点。');
       }
       throw new Error('请求失败（网络错误，已重试 3 次）：' + ((lastErr && lastErr.message) || '未知'));
     }
@@ -1417,10 +1660,27 @@
   }
 
   // ---------- 系统提示 ----------
+  // 读技能索引：工作文件夹下的 skills/INDEX.md（如果有）
+  // 好处是"知识"放在文件里可以随时改，不用塞进预设、不用改代码，也不占每轮上下文太多。
+  function loadSkillIndex() {
+    try {
+      const fsMod = require('fs');
+      for (let i = 0; i < roots.length; i++) {
+        const p = String(roots[i].path).replace(/[\\/]+$/, '') + '\\skills\\INDEX.md';
+        if (fsMod.existsSync(p)) {
+          const t = fsMod.readFileSync(p, 'utf8');
+          return { path: p, text: t.slice(0, 2500) };
+        }
+      }
+    } catch (e) {}
+    return null;
+  }
+
   function buildSystemPrompt(files) {
     const rootsTxt = roots.map(function (r) { return '- ' + r.path; }).join('\n');
     const fileTxt = files.slice(0, 400).map(function (f) { return f.abs; }).join('\n');
     const presetTxt = activePresetContent();
+    const skill = loadSkillIndex();
     // ★ 联网搜索是否可用，取决于用户有没有填 Tavily Key
     const hasSearchKey = (function () {
       try { return !!(localStorage.getItem('llm_tavily_key') || '').trim(); } catch (e) { return false; }
@@ -1434,6 +1694,8 @@
       '',
       '当前文件清单（共 ' + files.length + ' 个' + (files.length > 400 ? '，仅列前 400 个' : '') + '）：',
       fileTxt || '(空)',
+      skill ? ('\n【技能索引】（来自 ' + skill.path + '）\n' + skill.text
+        + '\n（做相关任务前，先用 read 打开对应的技能文件，按里面的流程和规格执行）') : '',
       presetTxt ? ('\n【用户附加的工作说明书】\n' + presetTxt) : ''
     ].join('\n');
   }
@@ -1455,6 +1717,15 @@
         if (q.content === p.content) {                 // 完全相同 → 忽略，但仍算本轮触及
           if (ti < 0) turnTouched.push(q);
           return false;
+        }
+        // ★ 覆盖告警：模型分多次"写同一个文件"时，后一次会把前面的内容整段换掉。
+        //   实测踩过：完整 PRD（约 3000 字）被一条 400 字的补充覆盖，事后才发现。
+        const oldLen = String(q.content || '').length;
+        const newLen = String(p.content || '').length;
+        if (oldLen > 800 && newLen < oldLen * 0.6) {
+          const warn = '⚠ ' + relOf(p.abs) + ' 被大幅改写（' + oldLen + ' → ' + newLen + ' 字），可能丢了内容';
+          if (currentBubble) addActivity(currentBubble, warn);
+          if (typeof showToast === 'function') showToast(warn);
         }
         proposals[i] = p;                              // 同一目标的新版本 → 替换
         if (ti >= 0) turnTouched[ti] = p; else turnTouched.push(p);
@@ -1512,9 +1783,16 @@
       r = { ok: false, error: (e && e.message) ? e.message : String(e) };
     }
 
-    // ★ 小游戏：新建/改写的 HTML 是 Phaser 游戏时，把 phaser.min.js 一起放进同目录（断网可玩）
-    if (r && r.ok && gameSession && /\.html?$/i.test(p.abs)) {
-      try { await ipc.invoke('game-copy-phaser', p.abs); } catch (e) {}
+    // ★ HTML 里只要有 phaser，就把 phaser.min.js 一起放进同目录（断网也能玩）。
+    //   以前要求 gameSession 为真（用户那句话里得同时有"游戏"和"做/生成"），
+    //   分多轮做游戏时经常漏掉 → 打开就报"缺少 Game/phaser.min.js"。
+    if (r && r.ok && /\.html?$/i.test(p.abs) && (gameSession || /phaser/i.test(String(payload || '')))) {
+      try {
+        const cp = await ipc.invoke('game-copy-phaser', p.abs);
+        if (cp && cp.ok && currentBubble) {
+          addActivity(currentBubble, '📦 已把 phaser.min.js 放进同目录（断网可玩）');
+        }
+      } catch (e) {}
     }
 
     if (r && r.ok) {
@@ -1534,8 +1812,195 @@
     const pushAssistant = function () {
       msgs.push({ role: 'assistant', content: '```json\n' + JSON.stringify(c) + '\n```' });
     };
+
+    // ★ 生成图片（概念图）：接口差异、落盘、进度都由这里处理，模型只管"画什么"
+    if (a === 'generate-image' || a === 'generate_image' || a === 'generateimage') {
+      const prompt = String(c.prompt || c.description || c.text || '').trim();
+      const fail = function (msg) {
+        pushAssistant();
+        msgs.push({ role: 'user', content: '工具结果(generate-image)：\n' + msg });
+      };
+      if (!prompt) { fail('缺少 prompt（要画什么）。'); return; }
+
+      const api = (typeof window.agentImageApi === 'function') ? window.agentImageApi() : null;
+      if (!api || !api.key) {
+        fail('还没有可用的生图模型。请在 Agent 顶部「生图」下拉里选一个；'
+          + '下拉显示"未配置"时，先到「设置 → API 管理」添加一个生图模型（例如 nano-banana-lite）。');
+        return;
+      }
+
+      // 目标目录：优先 c.dir，否则第一个工作文件夹；一律放在 concept/ 下
+      let rootAbs = '';
+      const wantDir = String(c.dir || '').trim();
+      if (wantDir) {
+        const hit = roots.find(function (r) {
+          const a1 = String(r.path).replace(/[\\/]+$/, '').toLowerCase();
+          const b1 = wantDir.replace(/[\\/]+$/, '').toLowerCase();
+          return b1 === a1 || b1.indexOf(a1 + '\\') === 0;
+        });
+        if (hit) rootAbs = hit.path;
+      }
+      if (!rootAbs && roots.length) rootAbs = roots[0].path;
+      if (!rootAbs) { fail('还没有选择工作文件夹，无法保存图片。'); return; }
+
+      const fsMod = require('fs');
+      const dirAbs = rootAbs.replace(/[\\/]+$/, '') + '\\concept';
+      try { if (!fsMod.existsSync(dirAbs)) fsMod.mkdirSync(dirAbs, { recursive: true }); }
+      catch (e) { fail('创建 concept 目录失败：' + (e.message || e)); return; }
+
+      // 文件名：给了就用，没给就自动编号
+      // 注意：扩展名要等图下载完、看清真实格式再定（nano-banana-lite 返回的其实是 JPEG）
+      let baseName = String(c.name || '').replace(/[\\/:*?"<>|]/g, '').replace(/\.(png|jpe?g|webp)$/i, '').trim();
+      if (!baseName) {
+        let n = 1;
+        try {
+          const used = fsMod.readdirSync(dirAbs).filter(function (f) { return /^\d+-.*\.(png|jpe?g|webp)$/i.test(f); });
+          n = used.length + 1;
+        } catch (e) {}
+        baseName = (n < 10 ? '0' + n : '' + n) + '-concept';
+      }
+      const plannedRel = 'concept/' + baseName + '.png';
+
+      // 气泡里的进度行（带秒数，不然"画画"时看不出在动）
+      const line = document.createElement('div');
+      line.className = 'ag-activity';
+      line.textContent = '🎨 正在生成图片…';
+      if (currentBubble) { setThinking(currentBubble, false); currentBubble.appendChild(line); scrollChat(); }
+      const t0 = Date.now();
+      const timer = setInterval(function () {
+        line.textContent = '🎨 正在生成 ' + plannedRel + '…（已等 ' + Math.round((Date.now() - t0) / 1000) + ' 秒）';
+      }, 1000);
+
+      try {
+        // 不同模型参数不一样：nano-banana-lite 只吃 1:1 / 1K，gpt-image 系列可以带 quality
+        const isNano = /nano-?banana/i.test(String(api.model || ''));
+        const isGpt = /gpt|gtp/i.test(String(api.model || ''));
+        const body = { model: api.model, prompt: prompt, n: 1, size: '1024x1024' };
+        if (isGpt && !isNano) {
+          body.quality = /2[.\-]?5|sunburst|flare/i.test(String(api.model)) ? 'high' : 'medium';
+        }
+        const endpoint = String(api.url || '').replace(/\/+$/, '').replace(/\/images\/(generations|edits)$/i, '') + '/images/generations';
+        const ctl = new AbortController();
+        const kill = setTimeout(function () { try { ctl.abort(); } catch (e) {} }, 150000);
+        let resp, json;
+        try {
+          resp = await fetch(endpoint, {
+            method: 'POST',
+            signal: ctl.signal,
+            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + api.key },
+            body: JSON.stringify(body)
+          });
+          const txt = await resp.text();
+          try { json = JSON.parse(txt); } catch (e) { json = null; }
+          if (!resp.ok) {
+            throw new Error('HTTP ' + resp.status + '：' + ((json && json.error && json.error.message) || txt.slice(0, 200)));
+          }
+        } finally { clearTimeout(kill); }
+
+        const item = (json && json.data && json.data[0]) || null;
+        if (!item) throw new Error('接口没有返回图片数据。原始响应：' + JSON.stringify(json).slice(0, 200));
+
+        let buf = null;
+        if (item.b64_json) {
+          buf = Buffer.from(item.b64_json, 'base64');
+        } else if (item.url) {
+          const imgResp = await fetch(item.url);
+          if (!imgResp.ok) throw new Error('下载生成的图片失败：HTTP ' + imgResp.status);
+          buf = Buffer.from(await imgResp.arrayBuffer());
+        } else {
+          throw new Error('返回里既没有 b64_json 也没有 url。');
+        }
+        // ★ 按真实图片格式定扩展名：nano-banana-lite 返回的是 JPEG，
+        //   如果硬存成 .png，虽然浏览器多半能"猜"出来，但有些地方（预览、上传、发布）会挑食。
+        let realExt = '.png';
+        if (buf.length > 12) {
+          if (buf[0] === 0xFF && buf[1] === 0xD8) realExt = '.jpg';
+          else if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4E && buf[3] === 0x47) realExt = '.png';
+          else if (buf[0] === 0x52 && buf[1] === 0x49 && buf.slice(8, 12).toString('latin1') === 'WEBP') realExt = '.webp';
+        }
+        const fileName = baseName + realExt;
+        const absPath = dirAbs + '\\' + fileName;
+        const relPath = 'concept/' + fileName;
+        fsMod.writeFileSync(absPath, buf);
+
+        const kb = Math.round(buf.length / 1024);
+        turnTouched.push({ kind: 'create', abs: absPath, rel: relPath, content: '', old: '' });
+        line.textContent = '🎨 已生成 ' + relPath + '（' + kb + ' KB）';
+
+        // ★ 在气泡里直接放一张缩略图：不然"生成了图"只是文件路径，用户看不见
+        try {
+          const thumb = document.createElement('img');
+          thumb.className = 'ag-img-preview';
+          thumb.src = 'file:///' + String(absPath).replace(/\\/g, '/').replace(/^\/+/, '');
+          thumb.title = relPath + '（点一下用系统看图工具打开）';
+          thumb.addEventListener('click', function () {
+            if (ipc) ipc.invoke('agent-open-path', absPath).catch(function () {});
+          });
+          if (currentBubble) { currentBubble.appendChild(thumb); scrollChat(); }
+        } catch (e) {}
+
+        pushAssistant();
+        msgs.push({
+          role: 'user',
+          content: '工具结果(generate-image)：\n已生成 ' + relPath + '（1024×1024，' + kb + ' KB，模型 ' + api.model + '）。\n'
+            + '提示：这张图是给人看风格和配色的，禁止直接从里面切素材。'
+            + '游戏里的角色/场景请用代码画（像素数组或 graphics）。'
+        });
+
+        // 可选：把成品回传给模型自己看一眼（需要当前模型支持看图）
+        if (c.look === true || c.look === 'true') {
+          msgs.push({
+            role: 'user',
+            content: [
+              { type: 'text', text: '这是刚才生成的 ' + relPath + '，看一下它的配色和风格是否和需求一致。' },
+              { type: 'image_url', image_url: { url: 'data:image/png;base64,' + buf.toString('base64') } }
+            ]
+          });
+        }
+        return;
+      } catch (e) {
+        line.textContent = '🎨 ' + plannedRel + ' 生成失败';
+        fail('生成图片失败：' + (e && e.message ? e.message : String(e)) + '\n可以换个提示词再试一次，或跳过出图直接做游戏。');
+        return;
+      } finally {
+        clearInterval(timer);
+        scrollChat();
+      }
+    }
     if (a === 'read') {
       if (currentBubble) addActivity(currentBubble, '📄 读取 ' + relOf(c.path));
+      // ★ 图片：模型能看图，但必须由程序把像素发过去（直接读文件只能拿到二进制）
+      const rpImg = String(c.path || '');
+      if (/\.(png|jpe?g|webp|gif)$/i.test(rpImg)) {
+        const part = await imagePartFromFile(rpImg, 768);
+        pushAssistant();
+        if (part && part.url) {
+          msgs.push({
+            role: 'user',
+            content: [
+              {
+                type: 'text',
+                text: '工具结果(read ' + rpImg + ')：图片内容如下'
+                  + (part.scaled
+                    ? ('（已缩放到 ' + part.w + '×' + part.h + '，原图 ' + part.from.split('×')[0] + '×' + part.from.split('×')[1] + '）')
+                    : ('（原始尺寸 ' + part.w + '×' + part.h + '）'))
+                  + '。可以看图里的配色、明暗、材质、氛围；'
+                  + '不要从图里切素材，也不要把这张图的画幅当成游戏画幅——'
+                  + '游戏画幅按用户需求（PRD 里写的那个）来排。'
+              },
+              { type: 'image_url', image_url: { url: part.url } }
+            ]
+          });
+        } else {
+          msgs.push({
+            role: 'user',
+            content: '工具结果(read ' + rpImg + ')：\n[读图失败] '
+              + ((part && part.error) || '未知原因')
+              + '\n如果只是想确认文件是否存在，用 list；这里就不要再反复重试了。'
+          });
+        }
+        return;
+      }
       // ★ 第三方库 / 压缩文件不读内容：读进来只会把上下文撑爆（phaser.min.js 有 1.1MB）
       const rp = String(c.path || '');
       if (/(^|[\\/])node_modules([\\/]|$)/.test(rp) || /\.min\.(js|css)$/i.test(rp) || /\.(zip|exe|dll|msi|7z|rar)$/i.test(rp)) {
@@ -1570,6 +2035,68 @@
       msgs.push({ role: 'user', content: '工具结果(grep)：\n' + cap(txt, 20000) });
       return;
     }
+    if (a === 'plan') {
+      const steps = Array.isArray(c.steps) ? c.steps.map(function (x) { return String(x || '').slice(0, 120); }).filter(Boolean).slice(0, 20) : [];
+      const done = Array.isArray(c.done) ? c.done.map(function (x) { return parseInt(x, 10); }).filter(function (n) { return n > 0; }) : [];
+      if (!steps.length) {
+        pushAssistant();
+        msgs.push({ role: 'user', content: '工具结果(plan)：steps 是空的，请给出具体步骤。' });
+        return;
+      }
+      if (currentBubble) {
+        let el = currentBubble.querySelector('.ag-plan');
+        if (!el) {
+          el = document.createElement('div');
+          el.className = 'ag-plan';
+          currentBubble.appendChild(el);
+        }
+        el.innerHTML = '';
+        steps.forEach(function (s, i) {
+          const row = document.createElement('div');
+          row.className = 'ag-plan-item' + (done.indexOf(i + 1) >= 0 ? ' done' : '');
+          row.textContent = (done.indexOf(i + 1) >= 0 ? '✓ ' : '○ ') + (i + 1) + '. ' + s;
+          el.appendChild(row);
+        });
+        const head = document.createElement('div');
+        head.className = 'ag-plan-head';
+        head.textContent = '计划（' + done.length + '/' + steps.length + '）';
+        el.insertBefore(head, el.firstChild);
+        scrollChat();
+      }
+      pushAssistant();
+      msgs.push({
+        role: 'user',
+        content: '工具结果(plan)：已记录 ' + steps.length + ' 个步骤，完成 ' + done.length + ' 个。\n'
+          + '按计划逐条执行；每完成一步再调用一次 plan 更新 done。'
+      });
+      return;
+    }
+
+    if (a === 'check-page' || a === 'check_page' || a === 'checkpage') {
+      const target = String(c.path || '').trim();
+      if (currentBubble) addActivity(currentBubble, '🔍 自检页面 ' + (relOf(target) || target));
+      let rep = null;
+      try {
+        rep = ipc ? await ipc.invoke('agent-check-page', target) : { ok: false, text: '无法访问浏览器（没有 ipc）' };
+      } catch (e) {
+        rep = { ok: false, text: '自检调用失败：' + (e && e.message ? e.message : String(e)) };
+      }
+      const reportText = (rep && rep.text) ? rep.text : '没有拿到自检结果';
+      if (currentBubble) {
+        if (rep && rep.ok) addActivity(currentBubble, '✅ 页面自检通过');
+        else addActivity(currentBubble, '⚠ 页面自检发现问题：' + String(reportText).replace(/\s+/g, ' ').slice(0, 120));
+      }
+      pushAssistant();
+      msgs.push({
+        role: 'user',
+        content: '工具结果(check-page)：\n' + reportText + '\n\n'
+          + (rep && rep.ok
+            ? '页面能正常跑，可以继续。'
+            : '请按上面的错误修好对应文件，然后**再调用一次 check-page** 确认通过；连续修不好的话，把具体原因告诉用户。')
+      });
+      return;
+    }
+
     if (a === 'list') {
       if (currentBubble) addActivity(currentBubble, '🗂 列目录 ' + (c.path || '全部'));
       const r = await ipc.invoke('agent-list');
@@ -1854,26 +2381,40 @@
       const se = String((r && r.stderr) || '').slice(-3000);
       const errMsg = String((r && r.error) || '').slice(0, 500);   // ★ IPC 层错误（脚本不存在等）
 
-      // 扫描脚本目录，把刚生成的文档收进本轮产物（用于给按钮）
+      // 扫描脚本目录，把刚生成的文档 / 网页 / 代码收进本轮产物（用于给按钮）
       try {
         const dir = sp.replace(/[\\/][^\\/]+$/, '');
         const now = Date.now();
         const ext = require('fs');
-        ext.readdirSync(dir).forEach(function (name) {
-          if (!/\.(pptx|docx|xlsx|pdf|png|jpg)$/i.test(name)) return;
-          const full = dir + '\\' + name;
-          try {
-            const st = ext.statSync(full);
-            if (now - st.mtimeMs < 120000) {
-              if (!turnTouched.some(function (x) { return x.abs === full; })) {
-                turnTouched.push({ kind: 'create', abs: full, rel: relOf(full), content: '', old: '' });
-              }
+        // ★ 以前只认文档和图片：脚本改了 index.html / js 就"看不见"，
+        //   于是明明把游戏修好了，却既不显示「打开页面」也没有「发布到网页」，
+        //   结束时还显示「本次未产生任何文件修改」——正是这次遇到的问题。
+        const scanDir = function (d, depth) {
+          let names = [];
+          try { names = ext.readdirSync(d, { withFileTypes: true }); } catch (e0) { return; }
+          names.forEach(function (ent) {
+            const full = d + '\\' + ent.name;
+            if (ent.isDirectory()) {
+              if (depth > 0 && !/^(node_modules|\.git)$/i.test(ent.name)) scanDir(full, depth - 1);
+              return;
             }
-          } catch (e2) {}
-        });
+            if (!/\.(pptx|docx|xlsx|pdf|png|jpe?g|html?|js|mjs|css|json)$/i.test(ent.name)) return;
+            if (/\.min\.(js|css)$/i.test(ent.name)) return;   // 库文件不算产物
+            try {
+              const st = ext.statSync(full);
+              if (now - st.mtimeMs < 120000) {
+                if (!turnTouched.some(function (x) { return x.abs === full; })) {
+                  turnTouched.push({ kind: 'create', abs: full, rel: relOf(full), content: '', old: '' });
+                }
+              }
+            } catch (e2) {}
+          });
+        };
+        scanDir(dir, 1);   // 脚本所在目录 + 往下 1 层（覆盖 Game\js\xxx.js）
       } catch (e2) {}
 
       if (r && r.ok) {
+        scriptOkThisTurn = true;   // ★ 脚本成功 = 可能改了磁盘文件，供产物识别兜底
         if (currentBubble) addActivity(currentBubble, '✅ 脚本执行完成' + (so ? '：' + so.replace(/\s+/g, ' ').slice(0, 160) : ''));
       } else {
         const why = (se || '').trim() || errMsg || '未知错误';
@@ -1911,6 +2452,7 @@
 
     running = true;
     turnTouched = [];
+    scriptOkThisTurn = false;   // ★ 本轮有没有成功跑过脚本（脚本改的文件不进提案队列）
     // ★ 清掉上一轮遗留的中止控制器。
     //   否则只要上一轮被中止过（点过停止 / 关窗中断），
     //   本轮循环开头的 abort 检查就会立刻 break ——
@@ -2070,6 +2612,68 @@
       content: (histHead + (histBody ? ' ' + histBody : '')).trim(),
       arts: pickArtifacts()   // ★ 记下产物，切页面回来还能恢复按钮
     });
+    // ★ 收尾自查：本轮写过 Phaser 的 HTML，但同目录没有 phaser.min.js（被删了/没复制成功）
+    //   → 再补一次。实测：模型有时会"清空重建目录"，把库一起删掉，然后页面报 Phaser is not defined。
+    try {
+      const fsChk = require('fs');
+      const seen = {};
+      for (let i = 0; i < turnTouched.length; i++) {
+        const tp = turnTouched[i];
+        const abs = String((tp && tp.abs) || '');
+        if (!/\.html?$/i.test(abs)) continue;
+        const dir = abs.replace(/[\\/][^\\/]+$/, '');
+        if (seen[dir.toLowerCase()]) continue;
+        seen[dir.toLowerCase()] = 1;
+        const lib = dir + '\\phaser.min.js';
+        let txt = '';
+        try { txt = fsChk.readFileSync(abs, 'utf8'); } catch (e) { continue; }
+        if (!/phaser/i.test(txt)) continue;
+        if (!fsChk.existsSync(lib)) {
+          try {
+            const cp = await ipc.invoke('game-copy-phaser', abs);
+            if (cp && cp.ok && currentBubble) addActivity(currentBubble, '📦 收尾检查：补回了 phaser.min.js');
+          } catch (e) {}
+        }
+      }
+    } catch (e) {}
+
+    // ★ 收尾自检：本轮写过 HTML 就自动跑一次页面检查，结果直接摆在气泡里。
+    //   这样"它说完成"和"页面真的能跑"就有了证据，不用你自己打开才知道。
+    if (!errText && !(abortCtl && abortCtl.signal.aborted) && ipc) {
+      try {
+        const htmls = [];
+        for (let i = 0; i < turnTouched.length; i++) {
+          const abs = String((turnTouched[i] && turnTouched[i].abs) || '');
+          if (/\.html?$/i.test(abs) && htmls.indexOf(abs) < 0) htmls.push(abs);
+        }
+        if (htmls.length) {
+          const target = htmls.filter(function (x) { return /index\.html$/i.test(x); })[0] || htmls[0];
+          if (currentBubble) addActivity(currentBubble, '🔍 交付前自检：' + relOf(target));
+          const rep = await ipc.invoke('agent-check-page', target);
+          if (currentBubble && rep) {
+            const passed = !!rep.ok;
+            const box = document.createElement('div');
+            box.className = 'ag-selfcheck ' + (passed ? 'ok' : 'bad');
+            box.textContent = (passed ? '🔍 页面自检通过 · ' : '🔍 页面自检发现问题 · ')
+              + String(rep.text || '').replace(/\s+/g, ' ').slice(0, 320);
+            currentBubble.appendChild(box);
+            if (!passed) {
+              const btn = document.createElement('button');
+              btn.className = 'ag-run-btn';
+              btn.style.marginTop = '6px';
+              btn.textContent = '让它自己修';
+              btn.addEventListener('click', function () {
+                btn.disabled = true;
+                sendMessage('页面自检报错如下，请修好后交付：\n' + String(rep.text || ''));
+              });
+              currentBubble.appendChild(btn);
+            }
+            scrollChat();
+          }
+        }
+      } catch (e) {}
+    }
+
     if (history.length > AGENT_HISTORY_MAX * 2) history = history.slice(history.length - AGENT_HISTORY_MAX * 2);
     saveHistory();   // ★ 写入 localStorage，下次打开还在
     running = false;

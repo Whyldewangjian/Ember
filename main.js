@@ -8,6 +8,7 @@ const docBuild = require('./js/doc-build');
 const browserModule = require('./js/browser-window');
 const updateModule = require('./js/update-check');
 const githubAuthModule = require('./js/github-auth');
+const pageCheckModule = require('./js/page-check');
 
 let mainWin = null;
 
@@ -441,6 +442,7 @@ app.whenReady().then(() => {
   browserModule.setupDownloadManager();
   updateModule.registerUpdateIPC();
   githubAuthModule.registerGithubAuthIPC();
+  pageCheckModule.registerPageCheckIPC();   // ★ 让 Agent 能"看到"网页跑起来的结果
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
