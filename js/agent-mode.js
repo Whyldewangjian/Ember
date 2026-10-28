@@ -1769,9 +1769,11 @@
     if (!autoFor(p.abs)) { addProposal(p); return false; }
 
     let r = null;
+    // ★ payload 必须在 try 外面声明：下面 try 之后的 phaser 复制判断要用到它，
+    //   放在 try 里就成了块作用域 → 会报 "payload is not defined"（这个坑已经踩过一次）。
+    let payload = p.content;
     try {
       // ★ 写 HTML 时纠正 Phaser 加载方式（模型常写死 CDN 地址）
-      let payload = p.content;
       if ((p.kind === 'write' || p.kind === 'create') && /\.html?$/i.test(p.abs) &&
           typeof EmberGame !== 'undefined' && EmberGame.normalize) {
         payload = EmberGame.normalize(payload);
