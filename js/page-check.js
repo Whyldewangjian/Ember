@@ -246,10 +246,13 @@ function formatReport(r) {
   const c = r.color;
   if (c) {
     const problems = [];
-    if (c.effectiveColors < 64) problems.push('同屏有效色只有 ' + c.effectiveColors + ' 个（现代像素游戏一般 80 到 200，少于 64 会像 8 位机）');
-    if (c.baseSat < 35) problems.push('大面积基色饱和度只有 ' + c.baseSat + '%（低于 35% 画面会发灰）');
-    if (c.hueCount < 3) problems.push('色相只有 ' + c.hueCount + ' 个（太单色）');
-    if (c.highSatArea < 1) problems.push('高饱和颜色面积只有 ' + c.highSatArea + '%（画面缺视觉焦点）');
+    // 阈值按"高质量像素游戏"的实测基准定（对标一张高水准小岛场景：82 色 / 平均饱和 54% / 高饱和面积 29%）
+    if (c.effectiveColors < 80) problems.push('同屏有效色只有 ' + c.effectiveColors + ' 个（合格线 80；现代像素游戏一般 80 到 200，少于 64 会明显像 8 位机）');
+    if (c.avgSat < 50) problems.push('加权平均饱和度只有 ' + c.avgSat + '%（合格线 50%；低于它整屏就发灰）');
+    if (c.highSatArea < 15) problems.push('高饱和颜色（S≥70%）面积只有 ' + c.highSatArea + '%（合格线 15%；这是画面有没有"亮眼处"的关键）');
+    if (c.baseSat < 35) problems.push('大面积基色饱和度只有 ' + c.baseSat + '%（合格线 35%；基色发灰是最常见的问题）');
+    if (c.hueCount < 3) problems.push('色相只有 ' + c.hueCount + ' 个（太单色了）');
+    if (c.hueCount > 9) problems.push('色相有 ' + c.hueCount + ' 个（太多了，画面会花；建议 3 到 8 个）');
     lines.push('');
     lines.push('色彩体检：有效色 ' + c.effectiveColors + ' 个 · 色相 ' + c.hueCount + ' 个'
       + ' · 平均饱和度 ' + c.avgSat + '% · 基色饱和度 ' + c.baseSat + '% · 高饱和面积 ' + c.highSatArea + '%');
@@ -259,7 +262,12 @@ function formatReport(r) {
     if (problems.length) {
       lines.push('色彩问题：');
       problems.forEach(function (p) { lines.push('· ' + p); });
-      lines.push('改法：加明暗阶梯（每主色 5 档）、把基色饱和度提到 35% 以上、加 2 到 3 个 80% 以上的强调色。');
+      lines.push('改法（按这个顺序改，通常一次就能达标）：');
+      lines.push('1. 把大面积底色换成"浓"的：草地/地面/天空用饱和度 45% 以上的颜色，不要灰绿灰蓝。');
+      lines.push('2. 每个主色补 5 档明暗（暗部用"更暗 + 更浓"，不是加灰）。');
+      lines.push('3. 加 2 到 3 个高饱和强调色（S 80% 以上），让它们占住 15% 以上的面积');
+      lines.push('   （例：水用亮青 S90%、受光叶片用亮黄绿 S75%、沙滩用暖橙 S60%）。');
+      lines.push('4. 色相控制在 3 到 8 个之间，别超 8 个。');
     }
   }
   return lines.join('\n');
