@@ -615,6 +615,20 @@
       if (s) { const arr = JSON.parse(s); if (Array.isArray(arr)) presets = arr; }
       activePresetId = localStorage.getItem(ACTIVE_PRESET_KEY) || '';
     } catch (e) { presets = []; activePresetId = ''; }
+
+    // ★ 首次启动（或用户把预设全删了）→ 种入内置预设
+    //   这样装好软件就有"像素游戏制作"这条，不用用户自己写。
+    try {
+      if (!presets.length) {
+        const builtin = require('./default-presets').DEFAULT_PRESETS;
+        if (Array.isArray(builtin) && builtin.length) {
+          presets = builtin.map(function (p) {
+            return { id: p.id, name: p.name, content: p.content, builtin: true };
+          });
+          savePresets();
+        }
+      }
+    } catch (e) {}
   }
   function savePresets() {
     try { localStorage.setItem(PRESETS_KEY, JSON.stringify(presets)); } catch (e) {}
