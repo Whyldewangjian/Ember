@@ -1308,3 +1308,18 @@
 }
 .ag-attach-del:hover { background: #b4534a; color: #fff; }
 .ag-input-area.ag-drop-hot { outline: 2px dashed #4a9aa8; outline-offset: -4px; border-radius: 8px; }
+/* ★ 用户气泡里的参考图缩略图 */
+.ag-user-imgs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 6px;
+}
+.ag-user-img {
+  width: 64px;
+  height: 64px;
+  object-fit: cover;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, .18);
+  background: #0d1620;
+}

@@ -313,12 +313,25 @@
     if (!agChatEmpty) return;
     agChatEmpty.style.display = chatHasContent() ? 'none' : '';
   }
-  function addUserBubble(text) {
+  function addUserBubble(text, imgs) {
     const msg = document.createElement('div');
     msg.className = 'ag-msg ag-user';
     const b = document.createElement('div');
     b.className = 'ag-bubble';
     b.textContent = text;
+    // ★ 带参考图时，把缩略图也画在用户气泡里（否则历史里看不出你到底发了什么图）
+    if (imgs && imgs.length) {
+      const strip = document.createElement('div');
+      strip.className = 'ag-user-imgs';
+      imgs.forEach(function (src) {
+        if (!src) return;
+        const img = document.createElement('img');
+        img.src = src;
+        img.className = 'ag-user-img';
+        strip.appendChild(img);
+      });
+      if (strip.children.length) b.appendChild(strip);
+    }
     msg.appendChild(b);
     agChat.appendChild(msg);
     updateChatEmpty();
@@ -905,7 +918,8 @@
     history.forEach(function (m) {
       if (!m || typeof m.content !== 'string') return;
       if (m.role === 'user') {
-        addUserBubble(m.content);
+        const hs = Array.isArray(m.imgs) ? m.imgs.map(function (p) { return p ? ('file:///' + String(p).replace(/\\/g, '/')) : ''; }).filter(Boolean) : [];
+        addUserBubble(m.content, hs);
       } else if (m.role === 'assistant') {
         const b = addAgentBubble();
         setBubbleText(b, m.content);
@@ -2835,7 +2849,10 @@
     agSendBtn.disabled = true;
     agStopBtn.style.display = '';
     setStatus('');
-    addUserBubble(text);
+    // ★ 先把参考图快照下来：气泡要显示，历史也要记
+    const imgsForBubble = attachments.map(function (a) { return a.savedPath ? ('file:///' + String(a.savedPath).replace(/\\/g, '/')) : a.dataUrl; });
+    const imgPathsForHistory = attachments.map(function (a) { return a.savedPath || ''; }).filter(Boolean);
+    addUserBubble(text, imgsForBubble);
     // ★ 新一轮：重新吸附到底部
     if (window.emberStick && agChat) window.emberStick.reset(agChat);
 
@@ -3004,7 +3021,8 @@
       ? ('[本轮改动 ' + turnTouched.length + ' 项]')
       : '[本轮未改动文件]';
     const histBody = String(finalText || '').replace(/\s+/g, ' ').trim().slice(0, 200);
-    history.push({ role: 'user', content: text });
+    // 用 `text` 参与 API 消息，用 imgs 只做界面显示（history 里多一个字段不会进请求体）
+    history.push({ role: 'user', content: text, imgs: (typeof imgPathsForHistory !== 'undefined' ? imgPathsForHistory : []) });
     history.push({
       role: 'assistant',
       content: (histHead + (histBody ? ' ' + histBody : '')).trim(),
