@@ -614,6 +614,35 @@ ipcMain.handle('agent-scan-assets', async () => {
   } catch (e) { return { ok: false, error: (e && e.message) || String(e) }; }
 });
 
+// ★ Agent 参考图：选图 + 存盘
+//   选图返回路径，渲染进程自己读、缩放、转 dataURL；
+//   存盘是把它落到 <第一个工作文件夹>/assets/ref/ 下，这样模型之后还能用 read 再打开。
+ipcMain.handle('agent-pick-images', async (event) => {
+  try {
+    const win = BrowserWindow.fromWebContents(event.sender) || null;
+    const r = await dialog.showOpenDialog(win, {
+      title: '选择参考图（可多选）',
+      properties: ['openFile', 'multiSelections'],
+      filters: [{ name: '图片', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp'] }]
+    });
+    if (r.canceled || !r.filePaths || !r.filePaths.length) return { ok: false, canceled: true };
+    return { ok: true, files: r.filePaths };
+  } catch (e) { return { ok: false, error: (e && e.message) || String(e) }; }
+});
+
+ipcMain.handle('agent-save-image', async (event, base64, name) => {
+  try {
+    if (!agentRoots.length) return { ok: false, error: '还没有工作文件夹' };
+    const root = agentNorm(agentRoots[0]);
+    const dir = path.join(root, 'assets', 'ref');
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    const safe = String(name || ('ref-' + Date.now() + '.png')).replace(/[\\/:*?"<>|]/g, '_');
+    const full = path.join(dir, safe);
+    fs.writeFileSync(full, Buffer.from(String(base64 || ''), 'base64'));
+    return { ok: true, path: full, dir: dir };
+  } catch (e) { return { ok: false, error: (e && e.message) || String(e) }; }
+});
+
 ipcMain.handle('agent-read-file', async (event, p) => {
   try {
     const np = agentNorm(p);

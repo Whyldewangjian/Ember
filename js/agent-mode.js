@@ -1827,7 +1827,114 @@
     return null;
   }
 
-  // ---------- 资产索引（assets/<类型>/<名字>/meta.json）----------
+  // ---------- 参考图（粘贴 / 拖入 / 选文件）----------
+  // 模型能看图，但图片必须作为图片消息发过去；这里负责把图收好、缩到合适尺寸、随消息一起发。
+  let attachments = [];   // [{ name, dataUrl, savedPath }]
+  const AG_ATTACH_MAX = 4;
+
+  function renderAttachBar() {
+    const bar = document.getElementById('agAttachBar');
+    if (!bar) return;
+    if (!attachments.length) { bar.style.display = 'none'; bar.innerHTML = ''; return; }
+    bar.style.display = 'flex';
+    bar.innerHTML = '';
+    attachments.forEach(function (a, i) {
+      const box = document.createElement('div');
+      box.className = 'ag-attach-item';
+      box.title = a.name + '（点右上角 × 移除）';
+      const img = document.createElement('img');
+      img.src = a.dataUrl;
+      box.appendChild(img);
+      const x = document.createElement('button');
+      x.className = 'ag-attach-del';
+      x.textContent = '×';
+      x.addEventListener('click', function (ev) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        attachments.splice(i, 1);
+        renderAttachBar();
+      });
+      box.appendChild(x);
+      bar.appendChild(box);
+    });
+  }
+
+  // 把一张图缩到长边 ≤ 1024（省 token，也让模型更容易看清主体）
+  function shrinkToDataUrl(dataUrl, maxDim) {
+    maxDim = maxDim || 1024;
+    return new Promise(function (resolve) {
+      const img = new Image();
+      img.onload = function () {
+        try {
+          const w = img.naturalWidth || img.width;
+          const h = img.naturalHeight || img.height;
+          const scale = Math.min(1, maxDim / Math.max(w, h));
+          if (scale >= 1) return resolve(dataUrl);
+          const cv = document.createElement('canvas');
+          cv.width = Math.max(1, Math.round(w * scale));
+          cv.height = Math.max(1, Math.round(h * scale));
+          const c = cv.getContext('2d');
+          c.imageSmoothingEnabled = true;
+          c.drawImage(img, 0, 0, cv.width, cv.height);
+          resolve(cv.toDataURL('image/jpeg', 0.9));
+        } catch (e) { resolve(dataUrl); }
+      };
+      img.onerror = function () { resolve(null); };
+      img.src = dataUrl;
+    });
+  }
+
+  async function addAttachmentFromDataUrl(dataUrl, name) {
+    if (attachments.length >= AG_ATTACH_MAX) {
+      if (typeof showToast === 'function') showToast('最多附 ' + AG_ATTACH_MAX + ' 张参考图');
+      return;
+    }
+    const small = await shrinkToDataUrl(dataUrl, 1024);
+    if (!small) { if (typeof showToast === 'function') showToast('这张图读不出来'); return; }
+    const rec = { name: name || ('ref-' + Date.now() + '.jpg'), dataUrl: small, savedPath: '' };
+    // 顺手存一份到工作文件夹，之后模型还能自己 read 它
+    try {
+      if (ipc) {
+        const b64 = String(small).replace(/^data:[^;]+;base64,/, '');
+        const r = await ipc.invoke('agent-save-image', b64, rec.name.replace(/\.[^.]+$/, '') + '.jpg');
+        if (r && r.ok) rec.savedPath = r.path;
+      }
+    } catch (e) {}
+    attachments.push(rec);
+    renderAttachBar();
+  }
+
+  function addAttachmentFromFile(file) {
+    return new Promise(function (resolve) {
+      try {
+        const fr = new FileReader();
+        fr.onload = function () { resolve(addAttachmentFromDataUrl(String(fr.result || ''), file.name)); };
+        fr.onerror = function () { resolve(null); };
+        fr.readAsDataURL(file);
+      } catch (e) { resolve(null); }
+    });
+  }
+
+  async function pickAttachments() {
+    if (!ipc) return;
+    let r = null;
+    try { r = await ipc.invoke('agent-pick-images'); } catch (e) { r = null; }
+    if (!r || !r.ok || !r.files) return;
+    const fsMod = require('fs');
+    for (let i = 0; i < r.files.length; i++) {
+      const p = r.files[i];
+      try {
+        const buf = fsMod.readFileSync(p);
+        const ext = String(p).toLowerCase().match(/\.(\w+)$/);
+        const mime = ext && /^(png)$/.test(ext[1]) ? 'image/png'
+          : ext && /^(gif)$/.test(ext[1]) ? 'image/gif'
+            : ext && /^(webp)$/.test(ext[1]) ? 'image/webp' : 'image/jpeg';
+        await addAttachmentFromDataUrl('data:' + mime + ';base64,' + buf.toString('base64'), p.split(/[\\/]/).pop());
+      } catch (e) {}
+    }
+  }
+
+
   let assetsCache = [];
   async function refreshAssets() {
     if (!ipc) return;
@@ -2747,9 +2854,26 @@
       } catch (e) {}
     }
     // ★ 顺序必须是：system → 历史 → 本轮新消息（旧代码把新消息插在历史前面，导致模型答非所问）
+    // ★ 带参考图时，这条用户消息要变成「文字 + 图片」的多段内容，模型才真能看见图
+    let userMsg = { role: 'user', content: userContent };
+    if (attachments.length) {
+      const parts = [];
+      const refLines = [];
+      attachments.forEach(function (a, i) {
+        refLines.push('[参考图' + (i + 1) + '] ' + (a.savedPath || a.name));
+        parts.push({ type: 'image_url', image_url: { url: a.dataUrl } });
+      });
+      parts.unshift({
+        type: 'text',
+        text: userContent + '\n\n（已附参考图 ' + attachments.length + ' 张）\n' + refLines.join('\n')
+      });
+      userMsg = { role: 'user', content: parts };
+    }
     const msgs = [{ role: 'system', content: sysPrompt }]
       .concat(history.map(function (h) { return { role: h.role, content: h.content }; }))
-      .concat([{ role: 'user', content: userContent }]);
+      .concat([userMsg]);
+    // 图已经带进这一轮，之后清空，避免下一轮重复发送
+    if (attachments.length) { attachments = []; renderAttachBar(); }
 
     currentBubble = addAgentBubble();
     let finalText = '';
@@ -2979,7 +3103,47 @@
     agInput.addEventListener('input', function () { detectAt(); });
     agInput.addEventListener('click', function () { detectAt(); });
     agInput.addEventListener('blur', function () { setTimeout(closeAtPanel, 150); });
+
+    // 粘贴图片
+    agInput.addEventListener('paste', function (e) {
+      const cd = e.clipboardData;
+      if (!cd || !cd.items) return;
+      let handled = false;
+      for (let i = 0; i < cd.items.length; i++) {
+        const it = cd.items[i];
+        if (it.kind === 'file' && /^image\//.test(it.type)) {
+          const f = it.getAsFile();
+          if (f) { addAttachmentFromFile(f); handled = true; }
+        }
+      }
+      if (handled) e.preventDefault();
+    });
   }
+
+  // 拖图进来
+  (function bindDrop() {
+    const area = document.querySelector('.ag-input-area');
+    if (!area) return;
+    area.addEventListener('dragover', function (e) {
+      if (e.dataTransfer && Array.from(e.dataTransfer.types || []).indexOf('Files') >= 0) {
+        e.preventDefault();
+        area.classList.add('ag-drop-hot');
+      }
+    });
+    area.addEventListener('dragleave', function () { area.classList.remove('ag-drop-hot'); });
+    area.addEventListener('drop', function (e) {
+      area.classList.remove('ag-drop-hot');
+      const fs2 = e.dataTransfer && e.dataTransfer.files;
+      if (!fs2 || !fs2.length) return;
+      e.preventDefault();
+      for (let i = 0; i < fs2.length; i++) {
+        if (/^image\//.test(fs2[i].type)) addAttachmentFromFile(fs2[i]);
+      }
+    });
+  })();
+
+  const agAttachBtn = document.getElementById('agAttachBtn');
+  if (agAttachBtn) agAttachBtn.addEventListener('click', function () { pickAttachments(); });
 
   // 初始渲染
   renderRoots();

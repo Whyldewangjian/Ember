@@ -1283,8 +1283,10 @@
         </div>
         <div class="ag-input-area">
           <div class="sb-status" id="agStatus"></div>
+          <div class="ag-attach-bar" id="agAttachBar" style="display:none;"></div>
           <div class="ag-input-row">
-            <textarea id="agInput" placeholder="输入任务或对话…  Enter 发送，Shift+Enter 换行"></textarea>
+            <button class="ag-attach-btn" id="agAttachBtn" title="添加参考图（也可以直接粘贴或拖进来）"><i class="fas fa-image"></i></button>
+            <textarea id="agInput" placeholder="输入任务或对话…  Enter 发送，Shift+Enter 换行（可以直接粘贴/拖入参考图）"></textarea>
             <button class="ag-send-btn" id="agSendBtn" title="发送"><i class="fas fa-paper-plane"></i></button>
             <button class="ag-stop-btn" id="agStopBtn" title="停止" style="display:none;"><i class="fas fa-stop"></i></button>
           </div>

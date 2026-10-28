@@ -1258,3 +1258,53 @@
 /* 分镜表格：表格正文 */
 .sb-table-wrap table { font-size: calc(13px * var(--fs-scale, 1)); }
 
+
+/* ★ Agent 参考图：按钮 + 缩略图条 + 拖入高亮 */
+.ag-attach-btn {
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  margin-right: 6px;
+  border-radius: 8px;
+  border: 1px solid var(--card-border, #2c3d4a);
+  background: rgba(120, 160, 200, .10);
+  color: var(--text-soft, #cfe0e8);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+}
+.ag-attach-btn:hover { background: rgba(120, 160, 200, .22); color: #fff; }
+.ag-attach-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 2px 2px;
+}
+.ag-attach-item {
+  position: relative;
+  width: 54px;
+  height: 54px;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid #2c3d4a;
+  background: #0d1620;
+}
+.ag-attach-item img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.ag-attach-del {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 16px;
+  height: 16px;
+  border: 0;
+  border-radius: 0 0 0 6px;
+  background: rgba(0, 0, 0, .65);
+  color: #ffb3a8;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+.ag-attach-del:hover { background: #b4534a; color: #fff; }
+.ag-input-area.ag-drop-hot { outline: 2px dashed #4a9aa8; outline-offset: -4px; border-radius: 8px; }
