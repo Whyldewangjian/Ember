@@ -9,6 +9,7 @@ const browserModule = require('./js/browser-window');
 const updateModule = require('./js/update-check');
 const githubAuthModule = require('./js/github-auth');
 const pageCheckModule = require('./js/page-check');
+const agentShellModule = require('./js/agent-shell');
 
 let mainWin = null;
 
@@ -443,6 +444,7 @@ app.whenReady().then(() => {
   updateModule.registerUpdateIPC();
   githubAuthModule.registerGithubAuthIPC();
   pageCheckModule.registerPageCheckIPC();   // ★ 让 Agent 能"看到"网页跑起来的结果
+  agentShellModule.registerShellIPC();      // ★ 给 Agent 一个常驻 PowerShell（装依赖/构建/看长日志）
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
@@ -569,6 +571,47 @@ ipcMain.handle('agent-list', async () => {
     });
     return { ok: true, entries: out, truncated: counter.n >= AGENT_MAX_FILES };
   } catch (e) { return { ok: false, error: e.message || String(e) }; }
+});
+
+// ★ 扫描资产：<工作文件夹>/assets/<类型>/<名字>/meta.json
+//   返回给渲染进程做 @ 列表，以及系统提示里的资产索引。
+ipcMain.handle('agent-scan-assets', async () => {
+  try {
+    const out = [];
+    agentRoots.forEach(function (r) {
+      const root = agentNorm(r);
+      const assetsDir = path.join(root, 'assets');
+      if (!fs.existsSync(assetsDir)) return;
+      let types = [];
+      try { types = fs.readdirSync(assetsDir, { withFileTypes: true }); } catch (e) { return; }
+      types.forEach(function (t) {
+        if (!t.isDirectory()) return;
+        const typeDir = path.join(assetsDir, t.name);
+        let items = [];
+        try { items = fs.readdirSync(typeDir, { withFileTypes: true }); } catch (e) { return; }
+        items.forEach(function (it) {
+          if (!it.isDirectory()) return;
+          const dir = path.join(typeDir, it.name);
+          const metaPath = path.join(dir, 'meta.json');
+          if (!fs.existsSync(metaPath)) return;
+          let meta = {};
+          try { meta = JSON.parse(fs.readFileSync(metaPath, 'utf8')); } catch (e) { meta = {}; }
+          const previewPath = path.join(dir, 'preview.html');
+          out.push({
+            id: meta.id || (t.name.replace(/s$/, '') + '.' + it.name),
+            name: meta.name || it.name,
+            type: meta.type || t.name.replace(/s$/, ''),
+            dir: dir,
+            metaPath: metaPath,
+            preview: fs.existsSync(previewPath) ? previewPath : '',
+            frameSize: Array.isArray(meta.frameSize) ? meta.frameSize : null,
+            hasSpriteJs: fs.existsSync(path.join(dir, 'sprite.js'))
+          });
+        });
+      });
+    });
+    return { ok: true, assets: out };
+  } catch (e) { return { ok: false, error: (e && e.message) || String(e) }; }
 });
 
 ipcMain.handle('agent-read-file', async (event, p) => {
