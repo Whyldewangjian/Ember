@@ -98,17 +98,18 @@
     var rt = refreshToken();
     var tip = '';
     if (tk) {
-      if (rt) {
-        if (exp) {
-          var left = Math.max(0, exp - Date.now());
-          var h = Math.floor(left / 3600000);
-          var m = Math.floor((left % 3600000) / 60000);
-          tip = ' · 令牌 ' + (left > 0 ? (h > 0 ? h + ' 小时 ' + m + ' 分' : m + ' 分') + '后过期，会自动续期' : '已过期（下次操作时自动续期）');
-        } else {
-          tip = ' · 可自动续期';
-        }
+      if (rt && exp) {
+        var left = Math.max(0, exp - Date.now());
+        var h = Math.floor(left / 3600000);
+        var m = Math.floor((left % 3600000) / 60000);
+        tip = ' · 令牌 ' + (left > 0 ? (h > 0 ? h + ' 小时 ' + m + ' 分' : m + ' 分') + '后过期，会自动续期' : '已过期（下次操作时自动续期）');
+      } else if (rt) {
+        tip = ' · 令牌可自动续期';
       } else if (exp) {
         tip = ' · ⚠ 没有续期凭证，过期后需要重新连接';
+      } else {
+        // 既没有 refresh 也没有过期时间：说明这个 App 没启用令牌过期 → 长期有效
+        tip = ' · 令牌长期有效';
       }
     }
     if (tk && u) {
