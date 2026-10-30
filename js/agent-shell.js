@@ -53,7 +53,6 @@ function hitsRoot(cmd) {
     if (!rootsGetter || !(rootsGetter() || []).length) return '';
     const s = String(cmd || '');
     const isDelete = /remove-item|\bdel\b|\brd\b|\bri\b|\brm\b/i.test(s);
-    const isRecursive = /-recurse|-r\b|\/s/i.test(s);
     if (!isDelete) return '';
     const roots = rootsGetter() || [];
     for (let i = 0; i < roots.length; i++) {

@@ -2444,8 +2444,12 @@
         : ('[失败' + (rep && rep.denied ? '：已拒绝' : '') + '] ' + ((rep && rep.error) || '未知错误')
           + (rep && rep.hint ? '\n提示：' + rep.hint : ''));
       if (currentBubble) {
-        if (rep && rep.failed && rep.failed.length) addActivity(currentBubble, '⚠ 有 ' + rep.failed.length + ' 项操作失败');
-        addActivity(currentBubble, rep && rep.ok ? '✅ 命令已执行' : '⛔ 命令被拒绝');
+        if (rep && rep.failed && rep.failed.length) {
+          addActivity(currentBubble, '⚠ 有 ' + rep.failed.length + ' 项操作失败');
+          addActivity(currentBubble, '⚠ 命令执行完了，但上面这些没成功');
+        } else {
+          addActivity(currentBubble, rep && rep.ok ? '✅ 命令已执行' : '⛔ 命令被拒绝');
+        }
       }
       pushAssistant();
       msgs.push({
