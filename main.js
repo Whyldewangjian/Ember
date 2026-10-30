@@ -20,7 +20,13 @@ let mainWin = null;
 //   所以正式版只允许一个实例：第二次双击不新开窗口，而是把已有窗口唤到最前。
 //   开发版（npm start）不加锁，方便同时开几个对比测试。
 const SINGLE_INSTANCE_OK = app.isPackaged ? app.requestSingleInstanceLock() : true;
-if (!SINGLE_INSTANCE_OK) {
+// ★ 自动更新后重新启动：安装程序启动新版本时，旧进程可能还没完全退出，
+//   这时拿不到单实例锁 → 新进程直接退出 → 用户以为"更新完就没启动了"。
+//   带 --updated / --squirrel 参数说明这是刚更新完的启动，允许等一会儿再抢锁。
+const LAUNCHED_AFTER_UPDATE = process.argv.some(function (a) {
+  return /--updated|--squirrel|--relaunch/i.test(String(a || ''));
+});
+if (!SINGLE_INSTANCE_OK && !LAUNCHED_AFTER_UPDATE) {
   app.quit();
 } else {
   app.on('second-instance', function () {
@@ -435,9 +441,18 @@ app.on('web-contents-created', function (e, contents) {
 });
 
 
-app.whenReady().then(() => {
-  // ★ 没拿到单实例锁（已有实例在跑）→ 什么都不做，让进程安静退出
-  if (!SINGLE_INSTANCE_OK) return;
+app.whenReady().then(async () => {
+  // ★ 没拿到单实例锁：
+  //   · 如果是"刚更新完"的启动 → 等旧进程退出后重试抢锁（最多 12 秒），这样用户能看到新版本自己起来
+  //   · 否则（用户重复双击）→ 什么都不做，让进程安静退出
+  let ok = SINGLE_INSTANCE_OK;
+  if (!ok && LAUNCHED_AFTER_UPDATE) {
+    for (let i = 0; i < 12 && !ok; i++) {
+      await new Promise(function (r) { setTimeout(r, 1000); });
+      ok = app.requestSingleInstanceLock();
+    }
+  }
+  if (!ok) return;
   createWindow();
   browserModule.registerBrowserIPC();
   browserModule.setupDownloadManager();

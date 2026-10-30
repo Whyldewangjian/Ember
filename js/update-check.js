@@ -456,11 +456,36 @@ function registerUpdateIPC() {
       broadcastProgress('installing', {});
 
       if (!portable) {
-        // ---------- 安装版：静默运行新版安装程序，它会覆盖旧文件并自动启动 ----------
-        // NSIS 的 /S 是静默安装；electron-builder 的安装脚本在静默模式下
-        // 默认会重新创建快捷方式并在结束后启动应用。
+        // ---------- 安装版：静默运行新版安装程序，它会覆盖旧文件 ----------
+        // NSIS 的 /S 是静默安装；electron-builder 默认会在安装结束后启动应用。
         const child = spawn(newExe, ['/S'], { detached: true, stdio: 'ignore', windowsHide: true });
         child.unref();
+
+        // ★ 兜底重启：实测在静默安装 + 单实例锁的组合下，
+        //   安装程序「启动新版本」这一步可能被跳过（新进程抢不到锁就退了），
+        //   表现就是"更新完 Ember 没自己回来"。这里再放一个外部脚本：
+        //   等安装进程结束后，显式带 --updated 启动 Ember。
+        try {
+          const exe = process.execPath;
+          // bat 只能安全写 ASCII；安装路径含中文时不动它，交给安装程序自己处理
+          if (!/[^\x00-\x7F]/.test(exe) && !/[^\x00-\x7F]/.test(newExe)) {
+            const batPath = path.join(tmpDir, 'relaunch-ember.bat');
+            const installerName = path.basename(newExe);
+            const bl = [
+              '@echo off',
+              'ping 127.0.0.1 -n 4 > nul',
+              ':wait',
+              'tasklist /fi "imagename eq ' + installerName + '" 2>nul | find /i "' + installerName + '" >nul',
+              'if not errorlevel 1 ( ping 127.0.0.1 -n 3 >nul & goto wait )',
+              'ping 127.0.0.1 -n 3 > nul',
+              'start "" "' + exe + '" --updated',
+              'del "%~f0" > nul 2>&1'
+            ];
+            fs.writeFileSync(batPath, bl.join('\r\n') + '\r\n', 'ascii');
+            spawn('cmd.exe', ['/c', batPath], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
+          }
+        } catch (e) {}
+
         send('restarting');
         setTimeout(function () { app.quit(); }, 600);
         return { ok: true, mode: 'installer', target: process.execPath, asset: asset.name };
