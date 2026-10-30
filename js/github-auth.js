@@ -114,7 +114,17 @@ function registerGithubAuthIPC() {
         grant_type: 'urn:ietf:params:oauth:grant-type:device_code'
       });
       if (r.access_token) {
-        return { ok: true, authorized: true, token: r.access_token, scope: r.scope || '' };
+        // ★ 把 refresh_token / expires_in 一起交给渲染进程存下来。
+        //   GitHub App 的用户令牌默认 8 小时过期，只存 access_token 的话，
+        //   8 小时后必然 401（用户什么都没做也会掉线）。有 refresh 才能自动续期。
+        return {
+          ok: true,
+          authorized: true,
+          token: r.access_token,
+          scope: r.scope || '',
+          refreshToken: r.refresh_token || '',
+          expiresIn: r.expires_in || 0
+        };
       }
       if (r.error === 'authorization_pending') return { ok: true, authorized: false, pending: true };
       if (r.error === 'slow_down') return { ok: true, authorized: false, pending: true, slowDown: true };
@@ -126,7 +136,34 @@ function registerGithubAuthIPC() {
     }
   });
 
-  // ③ 打开系统浏览器到授权页
+  // ③ 用 refresh_token 换新的 access_token（自动续期）
+  //    GitHub App 的用户令牌 8 小时过期；有 refresh_token 就能在过期前换新的，
+  //    用户不会再"什么都没做就掉线"。
+  ipcMain.handle('gh-refresh', async function (event, refreshToken) {
+    try {
+      const rt = String(refreshToken || '').trim();
+      if (!rt) return { ok: false, error: '没有 refresh_token，无法自动续期' };
+      const r = await postForm('/login/oauth/access_token', {
+        client_id: CLIENT_ID,
+        grant_type: 'refresh_token',
+        refresh_token: rt
+      });
+      if (r.access_token) {
+        return {
+          ok: true,
+          token: r.access_token,
+          refreshToken: r.refresh_token || rt,
+          expiresIn: r.expires_in || 0,
+          scope: r.scope || ''
+        };
+      }
+      return { ok: false, error: r.error_description || r.error || '续期失败' };
+    } catch (e) {
+      return { ok: false, error: (e && e.message) || String(e) };
+    }
+  });
+
+  // ④ 打开系统浏览器到授权页
   ipcMain.handle('gh-open-verify', async function (event, url) {
     try {
       const u = String(url || '').trim();

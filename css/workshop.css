@@ -1323,3 +1323,10 @@
   border: 1px solid rgba(255, 255, 255, .18);
   background: #0d1620;
 }
+/* ★ GitHub 令牌状态小字（能不能自动续期） */
+.gh-token-tip {
+  margin-left: 6px;
+  font-size: 11px;
+  color: var(--text-muted, #8a9aa5);
+  font-weight: normal;
+}

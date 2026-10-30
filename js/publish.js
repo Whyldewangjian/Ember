@@ -12,6 +12,9 @@
 
   var TOKEN_KEY = 'llm_github_token';
   var USER_KEY = 'llm_github_user';
+  // ★ GitHub App 的用户令牌 8 小时过期，必须把续期凭证也存下来，否则到点就掉线
+  var REFRESH_KEY = 'llm_github_refresh';
+  var EXPIRES_KEY = 'llm_github_expires';
 
   var ipc = null;
   try { ipc = require('electron').ipcRenderer; } catch (e) {}
@@ -38,25 +41,79 @@
 
   function token() { try { return localStorage.getItem(TOKEN_KEY) || ''; } catch (e) { return ''; } }
   function username() { try { return localStorage.getItem(USER_KEY) || ''; } catch (e) { return ''; } }
-  function saveAuth(tk, login) {
+  function refreshToken() { try { return localStorage.getItem(REFRESH_KEY) || ''; } catch (e) { return ''; } }
+  function expiresAt() { try { return Number(localStorage.getItem(EXPIRES_KEY) || 0) || 0; } catch (e) { return 0; } }
+
+  function saveAuth(tk, login, refresh, expiresIn) {
     try {
       localStorage.setItem(TOKEN_KEY, tk || '');
       localStorage.setItem(USER_KEY, login || '');
+      if (refresh !== undefined) localStorage.setItem(REFRESH_KEY, refresh || '');
+      if (expiresIn !== undefined) {
+        // expiresIn 是"多少秒后过期"；存绝对时间，重启后也能判断
+        localStorage.setItem(EXPIRES_KEY, expiresIn ? String(Date.now() + Number(expiresIn) * 1000) : '0');
+      }
     } catch (e) {}
   }
   function clearAuth() {
     try {
       localStorage.removeItem(TOKEN_KEY);
       localStorage.removeItem(USER_KEY);
+      localStorage.removeItem(REFRESH_KEY);
+      localStorage.removeItem(EXPIRES_KEY);
     } catch (e) {}
+  }
+
+  // ★ 保证手里有一个能用的 token：快过期（或已过期）就用 refresh_token 换新的
+  var refreshing = null;
+  async function ensureToken(force) {
+    var tk = token();
+    var exp = expiresAt();
+    var rt = refreshToken();
+    var soon = exp && (Date.now() > exp - 120000);      // 剩不到 2 分钟就当过期
+    if (!rt) return tk;                                  // 没有续期凭证，只能用它
+    if (!force && !soon) return tk;
+    if (!ipc) return tk;
+    if (refreshing) return refreshing;                   // 并发时共用一次续期
+    refreshing = (async function () {
+      try {
+        var r = await ipc.invoke('gh-refresh', rt);
+        if (r && r.ok && r.token) {
+          saveAuth(r.token, username(), r.refreshToken || rt, r.expiresIn || 0);
+          return r.token;
+        }
+        return '';                                       // 续期失败 → 调用方按 401 处理
+      } catch (e) { return ''; }
+      finally { refreshing = null; }
+    })();
+    return refreshing;
   }
 
   // ---------- 状态显示 ----------
   function renderStatus() {
     var tk = token();
     var u = username();
+    // ★ 把令牌状态也说清楚：能不能自动续期、还剩多久
+    var exp = expiresAt();
+    var rt = refreshToken();
+    var tip = '';
+    if (tk) {
+      if (rt) {
+        if (exp) {
+          var left = Math.max(0, exp - Date.now());
+          var h = Math.floor(left / 3600000);
+          var m = Math.floor((left % 3600000) / 60000);
+          tip = ' · 令牌 ' + (left > 0 ? (h > 0 ? h + ' 小时 ' + m + ' 分' : m + ' 分') + '后过期，会自动续期' : '已过期（下次操作时自动续期）');
+        } else {
+          tip = ' · 可自动续期';
+        }
+      } else if (exp) {
+        tip = ' · ⚠ 没有续期凭证，过期后需要重新连接';
+      }
+    }
     if (tk && u) {
-      statusEl.innerHTML = '<i class="fas fa-circle-check"></i> 已连接：<b>' + escapeHtml(u) + '</b>';
+      statusEl.innerHTML = '<i class="fas fa-circle-check"></i> 已连接：<b>' + escapeHtml(u) + '</b>'
+        + (tip ? '<span class="gh-token-tip">' + escapeHtml(tip) + '</span>' : '');
       statusEl.className = 'gh-pub-status ok';
       connectBtn.style.display = 'none';
       disconnectBtn.style.display = '';
@@ -168,16 +225,20 @@
         if (r && r.ok && r.authorized && r.token) {
           stopPolling();
           var tk = r.token;
-          saveAuth(tk, '');
+          // ★ 连 refresh_token 和过期时间一起存（有了它们，8 小时过期会自动续期）
+          saveAuth(tk, '', r.refreshToken || '', r.expiresIn || 0);
           setCodeStatus('<i class="fas fa-circle-check"></i> 授权成功，正在读取账号信息…', 'ok');
           var tk2 = token();
           fetch('https://api.github.com/user', {
             headers: { 'Authorization': 'Bearer ' + tk2, 'Accept': 'application/vnd.github+json' }
           }).then(function (res) { return res.json(); }).then(function (j) {
-            saveAuth(tk2, (j && j.login) || '');
+            saveAuth(tk2, (j && j.login) || '', r.refreshToken || '', r.expiresIn || 0);
             renderStatus();
             setTimeout(closeModal, 600);
-            if (typeof showToast === 'function') showToast('✅ 已连接 GitHub' + (j && j.login ? '：' + j.login : ''));
+            if (typeof showToast === 'function') {
+              showToast('✅ 已连接 GitHub' + (j && j.login ? '：' + j.login : '')
+                + (r.refreshToken ? '（令牌过期会自动续期）' : ''));
+            }
           }).catch(function () {
             renderStatus();
             setTimeout(closeModal, 600);
@@ -448,9 +509,9 @@
     });
   }
 
-  function ghHeaders(extra) {
+  function ghHeaders(extra, tokenOverride) {
     return Object.assign({
-      'Authorization': 'Bearer ' + token(),
+      'Authorization': 'Bearer ' + (tokenOverride || token()),
       'Accept': 'application/vnd.github+json',
       'X-GitHub-Api-Version': '2022-11-28'
     }, extra || {});
@@ -458,22 +519,37 @@
 
   async function gh(pathname, options) {
     options = options || {};
+    // ★ 发请求前先确保 token 没过期（快过期会自动续期）
+    var tk = await ensureToken(false);
     var res = await fetch(API + pathname, {
       method: options.method || 'GET',
-      headers: ghHeaders(options.body ? { 'Content-Type': 'application/json' } : null),
+      headers: ghHeaders(options.body ? { 'Content-Type': 'application/json' } : null, tk),
       body: options.body ? JSON.stringify(options.body) : undefined
     });
     var txt = await res.text();
     var json = null;
     try { json = txt ? JSON.parse(txt) : null; } catch (e) {}
-    // ★ 401 = 令牌失效（被吊销 / 过期 / 用户改过密码）。
-    //   顺手清掉本地令牌，界面立刻显示「未连接」，用户不会再反复点发布无效重试。
+    // ★ 401：先试一次自动续期再重发，仍然不行才清令牌。
+    //   以前是直接清掉 + 让用户重连，所以"8 小时后又掉线"。
     if (res.status === 401) {
-      try {
-        localStorage.removeItem(TOKEN_KEY);
-        localStorage.removeItem(USER_KEY);
-        if (window.EmberGitHub && window.EmberGitHub.refreshStatus) window.EmberGitHub.refreshStatus();
-      } catch (e) {}
+      var fresh = await ensureToken(true);
+      if (fresh && fresh !== tk) {
+        tk = fresh;
+        res = await fetch(API + pathname, {
+          method: options.method || 'GET',
+          headers: ghHeaders(options.body ? { 'Content-Type': 'application/json' } : null, tk),
+          body: options.body ? JSON.stringify(options.body) : undefined
+        });
+        txt = await res.text();
+        json = null;
+        try { json = txt ? JSON.parse(txt) : null; } catch (e) {}
+      }
+      if (res.status === 401) {
+        try {
+          clearAuth();
+          if (window.EmberGitHub && window.EmberGitHub.refreshStatus) window.EmberGitHub.refreshStatus();
+        } catch (e) {}
+      }
     }
     return { ok: res.ok, status: res.status, json: json, text: txt };
   }
