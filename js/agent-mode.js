@@ -1924,10 +1924,17 @@
     if (!small) { if (typeof showToast === 'function') showToast('这张图读不出来'); return; }
     const rec = { name: name || ('ref-' + Date.now() + '.jpg'), dataUrl: small, savedPath: '' };
     // 顺手存一份到工作文件夹，之后模型还能自己 read 它
+    // ★ 文件名必须唯一：同名文件（比如都叫 image.png）以前会互相覆盖，
+    //   结果历史里那张图变成了后来那张 —— 用户看到的图对不上。
     try {
       if (ipc) {
         const b64 = String(small).replace(/^data:[^;]+;base64,/, '');
-        const r = await ipc.invoke('agent-save-image', b64, rec.name.replace(/\.[^.]+$/, '') + '.jpg');
+        const stamp = new Date();
+        const pad = function (n) { return (n < 10 ? '0' : '') + n; };
+        const uniq = 'ref-' + stamp.getFullYear() + pad(stamp.getMonth() + 1) + pad(stamp.getDate())
+          + '-' + pad(stamp.getHours()) + pad(stamp.getMinutes()) + pad(stamp.getSeconds())
+          + '-' + Math.random().toString(36).slice(2, 7) + '.jpg';
+        const r = await ipc.invoke('agent-save-image', b64, uniq);
         if (r && r.ok) rec.savedPath = r.path;
       }
     } catch (e) {}
@@ -2876,8 +2883,11 @@
     agStopBtn.style.display = '';
     setStatus('');
     // ★ 先把参考图快照下来：气泡要显示，历史也要记
-    const imgsForBubble = attachments.map(function (a) { return a.savedPath ? ('file:///' + String(a.savedPath).replace(/\\/g, '/')) : a.dataUrl; });
+    // ★ 气泡直接用 dataUrl 显示本次这张图（不用磁盘路径）。
+    //   用路径的话，一旦文件名撞车或文件被覆盖，显示出来的就可能是另一张图。
+    const imgsForBubble = attachments.map(function (a) { return a.dataUrl; });
     const imgPathsForHistory = attachments.map(function (a) { return a.savedPath || ''; }).filter(Boolean);
+    const sentImages = attachments.length > 0;   // 本轮带图了吗（报错时用来区分"模型看不了图"）
     addUserBubble(text, imgsForBubble);
     // ★ 新一轮：重新吸附到底部
     if (window.emberStick && agChat) window.emberStick.reset(agChat);
@@ -3021,10 +3031,22 @@
       if (e && (e.name === 'AbortError' || /abort/i.test(e.message || ''))) {
         errText = '⏸ 已停止';
       } else {
-        errText = '✗ 出错：' + (e.message || e);
+        const msg = String((e && e.message) || e || '');
+        // ★ 图片相关的报错单独说清楚：多半是当前模型不支持看图
+        if (sentImages && /image|vision|multimodal|unsupported|not support|invalid.*type|不支持|无法处理/i.test(msg)) {
+          errText = '✗ 这个模型看不了图：' + msg.slice(0, 160)
+            + '\n   → 参考图只有支持看图的模型能读。把顶部的「模型」换成 claude / gemini / gpt 这类再发一次，'
+            + '或者不带图、直接用文字描述你想要的风格。';
+        } else {
+          errText = '✗ 出错：' + msg;
+        }
       }
       try { setThinking(currentBubble, false); } catch (e2) {}   // ★ 出错时一定要关掉「思考中」
       if (currentBubble) addActivity(currentBubble, errText);
+    } finally {
+      // ★ 不管成功失败，附件都要清掉：
+      //   否则失败那一轮的图会留在输入区，下一轮又被带上（用户会以为"发的是新图"）。
+      try { if (attachments.length) { attachments = []; renderAttachBar(); } } catch (e3) {}
     }
 
     if (finalText) setBubbleText(currentBubble, finalText.trim());
