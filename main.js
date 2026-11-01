@@ -956,7 +956,28 @@ ipcMain.handle('agent-analyze-palette', async (event, p) => {
     const bmp = img.toBitmap();
     const pal = colorPalette.extractPalette(bmp, size.width, size.height);
     if (!pal) return { ok: false, error: '这张图里没有可用颜色' };
+    // ★ 同时写一份机器可读的色板，供美术件生成与校验使用
+    let savedPath = '';
+    try {
+      if (agentRoots.length) {
+        const root = agentNorm(agentRoots[0]);
+        const dir = path.join(root, 'assets');
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        const out = path.join(dir, 'palette.json');
+        fs.writeFileSync(out, JSON.stringify({
+          source: np,
+          width: size.width,
+          height: size.height,
+          hues: pal.hues,
+          accents: pal.accents,
+          stats: pal.stats,
+          generatedAt: new Date().toISOString()
+        }, null, 2), 'utf8');
+        savedPath = out;
+      }
+    } catch (e2) {}
     return {
+      palettePath: savedPath,
       ok: true,
       file: np,
       width: size.width,

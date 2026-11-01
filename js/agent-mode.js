@@ -1790,7 +1790,20 @@
         required: ['cmd']
       }
     } },
-    // ★ 参考图 → 色板：把"看图猜配色"变成"量出具体色值"
+    // ★ 校验美术件用色有没有按 PRD 色板来
+    { type: 'function', function: {
+      name: 'check-asset',
+      description: '检查一个美术件的配色是否来自 assets/palette.json（PRD 色板）。'
+        + '读文件里的 #rrggbb，和色板做比对，给出重合率和偏离的颜色。'
+        + '做完角色/敌人/场景的美术件后调用一次；重合率低于 70% 就按报告调色。',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: '美术件文件绝对路径（sprite.js / 场景 js 等）' }
+        },
+        required: ['path']
+      }
+    } },    // ★ 参考图 → 色板：把"看图猜配色"变成"量出具体色值"
     { type: 'function', function: {
       name: 'analyze-palette',
       description: '从一张参考图里提取色板：主色相、每个色相的 5 档色值、大面积基色饱和度、强调色占比，'
@@ -2188,6 +2201,114 @@
 
   // ---------- 系统提示 ----------
   // 读技能索引：工作文件夹下的 skills/INDEX.md（如果有）
+  // ---------- PRD 摘要（画幅 + 色板）----------
+  // 为什么必须注入：PRD.md 只是个文件，系统提示里原本只有文件名。
+  // 结果就是"分开做美术件"时它拿不到色板 —— 每件各配各的色，拼起来像素材包。
+  // 这里每轮把「画幅那一行」和「第 7 章视觉规范」抽出来塞进提示词，色板才真正起作用。
+  // ---------- 美术件配色校验 ----------
+  // 读 palette.json（PRD 色板）+ 目标文件里的 #rrggbb，算重合率。
+  // 目的：把"应该遵守色板"变成"程序能判定"，避免每件各配各的色。
+  function checkAssetColors(targetPath) {
+    try {
+      const fsMod = require('fs');
+      let palPath = '';
+      for (let i = 0; i < roots.length && !palPath; i++) {
+        const p = String(roots[i].path).replace(/[\\/]+$/, '') + '\\assets\\palette.json';
+        if (fsMod.existsSync(p)) palPath = p;
+      }
+      if (!palPath) return { ok: false, error: '还没有色板：先对参考图跑一次 analyze-palette' };
+      if (!fsMod.existsSync(targetPath)) return { ok: false, error: '文件不存在：' + targetPath };
+
+      const pal = JSON.parse(fsMod.readFileSync(palPath, 'utf8'));
+      const paletteSet = new Set();
+      (pal.hues || []).forEach(function (h) {
+        (h.steps || []).forEach(function (s) { paletteSet.add(String(s).toLowerCase()); });
+      });
+      const accents = (pal.accents || []).map(function (a) { return String(a.hex).toLowerCase(); });
+      accents.forEach(function (a) { paletteSet.add(a); });
+
+      const txt = fsMod.readFileSync(targetPath, 'utf8');
+      const found = txt.match(/#[0-9a-fA-F]{6}/g) || [];
+      const usedSet = new Set(found.map(function (s) { return s.toLowerCase(); }));
+      const used = Array.from(usedSet);
+      if (!used.length) return { ok: false, error: '这个文件里没有 #rrggbb 颜色（可能是用 rgb()/hsl() 写的？）' };
+
+      let matchedCount = 0;
+      const outside = [];
+      used.forEach(function (hex) {
+        if (paletteSet.has(hex)) matchedCount++;
+        else outside.push(hex);
+      });
+      const missingAccents = accents.filter(function (a) { return usedSet.has(a) === false; });
+      return {
+        ok: true,
+        ratio: matchedCount / used.length,
+        used: used,
+        matchedCount: matchedCount,
+        outside: outside,
+        missingAccents: missingAccents,
+        palettePath: palPath
+      };
+    } catch (e) {
+      return { ok: false, error: (e && e.message) || String(e) };
+    }
+  }
+  function loadPrdDigest() {
+    try {
+      const fsMod = require('fs');
+      let prdPath = '';
+      for (let i = 0; i < roots.length && !prdPath; i++) {
+        const base = String(roots[i].path).replace(/[\\/]+$/, '');
+        const cand = base + '\\PRD.md';
+        if (fsMod.existsSync(cand)) prdPath = cand;
+      }
+      // 也允许放在项目根的一层子目录里（比如 Game/PRD.md）
+      if (!prdPath) {
+        for (let i = 0; i < roots.length && !prdPath; i++) {
+          const base = String(roots[i].path).replace(/[\\/]+$/, '');
+          let subs = [];
+          try { subs = fsMod.readdirSync(base, { withFileTypes: true }); } catch (e) { continue; }
+          for (let j = 0; j < subs.length; j++) {
+            if (!subs[j].isDirectory()) continue;
+            const cand = base + '\\' + subs[j].name + '\\PRD.md';
+            if (fsMod.existsSync(cand)) { prdPath = cand; break; }
+          }
+        }
+      }
+      if (!prdPath) return null;
+      const txt = fsMod.readFileSync(prdPath, 'utf8');
+
+      // 画幅/分辨率：取第一处出现的那行
+      let sizeLine = '';
+      const mSize = txt.match(/[^\n]*(画幅|逻辑分辨率|分辨率)[^\n]*/);
+      if (mSize) sizeLine = mSize[0].trim().slice(0, 120);
+
+      // 第 7 章：从「7」标题到下一个标题为止
+      let ch7 = '';
+      const re7 = /(^|\n)[#*\s]*第?\s*7\s*[章节][^\n]*\n([\s\S]*?)(?=\n[#*\s]*第?\s*8\s*[章节]|\n#{1,3}\s|\n$)/;
+      const m7 = txt.match(re7);
+      if (m7 && m7[2]) ch7 = m7[2].trim().slice(0, 1200);
+
+      // 色板 JSON（机器可读，优先用它，比表格更准）
+      let paletteTxt = '';
+      try {
+        const pj = String(roots[0].path).replace(/[\\/]+$/, '') + '\\assets\\palette.json';
+        if (fsMod.existsSync(pj)) {
+          const j = JSON.parse(fsMod.readFileSync(pj, 'utf8'));
+          const hueLines = (j.hues || []).slice(0, 8).map(function (h) {
+            return '- ' + h.name + '(' + h.hue + '°) ' + h.steps.join(' ');
+          });
+          paletteTxt = hueLines.join('\n');
+          if (j.accents && j.accents.length) {
+            paletteTxt += '\n强调色（必须真的用上）：' + j.accents.map(function (a) { return a.hex + '(S' + a.sat + '%)'; }).join('、');
+          }
+        }
+      } catch (e) {}
+
+      if (!sizeLine && !ch7 && !paletteTxt) return null;
+      return { path: prdPath, sizeLine: sizeLine, ch7: ch7, palette: paletteTxt };
+    } catch (e) { return null; }
+  }
   // 好处是"知识"放在文件里可以随时改，不用塞进预设、不用改代码，也不占每轮上下文太多。
   function loadSkillIndex() {
     try {
@@ -2393,6 +2514,7 @@
     const fileTxt = files.slice(0, 400).map(function (f) { return f.abs; }).join('\n');
     const presetTxt = activePresetContent();
     const skill = loadSkillIndex();
+    const prd = loadPrdDigest();          // ★ 画幅 + 色板（每轮都带，不靠模型记忆）
     // ★ 联网搜索是否可用，取决于用户有没有填 Tavily Key
     const hasSearchKey = (function () {
       try { return !!(localStorage.getItem('llm_tavily_key') || '').trim(); } catch (e) { return false; }
@@ -2416,6 +2538,10 @@
       '当前文件清单（共 ' + files.length + ' 个' + (files.length > 400 ? '，仅列前 400 个' : '') + '）：',
       fileTxt || '(空)',
       assetTxt,
+      prd ? ('\n【PRD 摘要】（来自 ' + prd.path + '；做美术件必须按这里的色板取色）\n'
+        + (prd.sizeLine ? ('画幅：' + prd.sizeLine + '\n') : '')
+        + (prd.palette ? ('色板（机器可读，优先用它）：\n' + prd.palette + '\n') : '')
+        + (prd.ch7 ? ('第 7 章视觉规范：\n' + prd.ch7 + '\n') : '')) : '',
       skill ? ('\n【技能索引】（来自 ' + skill.path + '）\n' + skill.text
         + '\n（做相关任务前，先用 read 打开对应的技能文件，按里面的流程和规格执行）') : '',
       presetTxt ? ('\n【用户附加的工作说明书】\n' + presetTxt) : ''
@@ -2757,6 +2883,37 @@
       }
       pushAssistant();
       msgs.push({ role: 'user', content: '工具结果(grep)：\n' + cap(txt, 20000) });
+      return;
+    }
+    if (a === 'check-asset' || a === 'check_asset') {
+      const fp = String(c.path || '').trim();
+      if (!fp) {
+        pushAssistant();
+        msgs.push({ role: 'user', content: '工具结果(check-asset)：path 不能为空。' });
+        return;
+      }
+      if (currentBubble) addActivity(currentBubble, '🔍 校验配色 ' + (relOf(fp) || fp));
+      const rep = checkAssetColors(fp);
+      if (!rep.ok) {
+        if (currentBubble) addActivity(currentBubble, '⚠ ' + rep.error);
+        pushAssistant();
+        msgs.push({ role: 'user', content: '工具结果(check-asset)：' + rep.error });
+        return;
+      }
+      const pct = Math.round(rep.ratio * 100);
+      const verdict = pct >= 70 ? '✅ 配色符合 PRD' : '⚠ 配色偏离 PRD';
+      if (currentBubble) addActivity(currentBubble, verdict + '（重合 ' + pct + '%）');
+      pushAssistant();
+      msgs.push({
+        role: 'user',
+        content: '工具结果(check-asset)：\n'
+          + '本件用到 ' + rep.used.length + ' 种颜色，其中 ' + rep.matchedCount + ' 种来自 PRD 色板，重合率 ' + pct + '%。\n'
+          + (rep.outside.length ? ('偏离色板的颜色（前 8 个）：' + rep.outside.slice(0, 8).join(' ') + '\n') : '')
+          + (rep.missingAccents.length ? ('色板里的强调色还没用上：' + rep.missingAccents.join(' ') + '\n') : '')
+          + (pct >= 70
+            ? '合格，可以继续。'
+            : '不合格：请把偏离的颜色换成色板里的色值（优先用同色相的明暗档），改完再调一次 check-asset。')
+      });
       return;
     }
     if (a === 'analyze-palette' || a === 'analyze_palette') {
