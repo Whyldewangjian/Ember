@@ -885,6 +885,17 @@
             name: p.name || '未命名项目',
             roots: Array.isArray(p.roots) ? p.roots : [],
             history: Array.isArray(p.history) ? p.history : [],
+            // ★ 会话必须原样带回来，否则重启后所有会话只剩一个（历史被合并）
+            sessions: Array.isArray(p.sessions) ? p.sessions.map(function (s) {
+              return {
+                id: s.id || ('s' + Math.random().toString(36).slice(2, 8)),
+                name: s.name || '',
+                history: Array.isArray(s.history) ? s.history : [],
+                createdAt: s.createdAt || Date.now(),
+                updatedAt: s.updatedAt || Date.now()
+              };
+            }) : [],
+            sessionId: p.sessionId || '',
             presetId: p.presetId || '',
             imageApiId: p.imageApiId || ''   // ★ 每个项目记住自己用的生图模型
           };
@@ -1069,14 +1080,28 @@
     ensureSessions(p);
     if (!p.sessions.some(function (s) { return s.id === id; })) return;
     if (running) { setStatus('正在运行，先别切会话'); renderSessionSelect(); return; }
-    persistActiveProject();            // 先把当前会话写回去
+
+    // ★ 先把"当前会话"的内容存进它自己那一份（显式按 id 写，别依赖全局指针）
+    const prevId = p.sessionId;
+    const prev = p.sessions.find(function (s) { return s.id === prevId; });
+    if (prev && prev.id !== id) {
+      prev.history = history.slice();        // 拷贝，避免和 history 共用同一个数组
+      prev.updatedAt = Date.now();
+      if (!prev.name || prev.name === '默认会话' || prev.name === '未命名会话') {
+        const t = sessionTitleFromHistory(prev.history);
+        if (t) prev.name = t;
+      }
+    }
+
     p.sessionId = id;
     const s = p.sessions.find(function (x) { return x.id === id; });
-    history = s.history;
+    if (!s) { renderSessionSelect(); return; }
+    history = s.history;                     // 之后 sendMessage 直接 push 进这段
+    p.history = history;                     // 兼容镜像
     saveProjects();
     renderSessionSelect();
     renderHistory();
-    setStatus('已切换到：' + (s.name || '未命名会话'));
+    setStatus('已切换到：' + (s.name || '未命名会话') + '（' + (s.history.length ? s.history.length + ' 条记录' : '空会话') + '）');
   }
   function newSession() {
     const p = currentProject();
@@ -1105,12 +1130,59 @@
     renderHistory();
     setStatus('已新建会话');
   }
-  function renameSession() {
+  // ★ Electron 里 window.prompt 是不支持的（调了没反应），所以自己做一个输入框
+  function askText(title, defaultValue, placeholder) {
+    return new Promise(function (resolve) {
+      const ov = document.createElement('div');
+      ov.className = 'ag-ask-overlay';
+      const box = document.createElement('div');
+      box.className = 'ag-ask-box';
+      const h = document.createElement('div');
+      h.className = 'ag-ask-title';
+      h.textContent = title || '输入内容';
+      const inp = document.createElement('input');
+      inp.className = 'ag-ask-input';
+      inp.value = defaultValue || '';
+      inp.placeholder = placeholder || '';
+      const row = document.createElement('div');
+      row.className = 'ag-ask-row';
+      const no = document.createElement('button');
+      no.className = 'cancel-btn';
+      no.textContent = '取消';
+      const ok = document.createElement('button');
+      ok.className = 'save-btn';
+      ok.textContent = '确定';
+      row.appendChild(no); row.appendChild(ok);
+      box.appendChild(h); box.appendChild(inp); box.appendChild(row);
+      ov.appendChild(box);
+      document.body.appendChild(ov);
+
+      let done = false;
+      function close(v) {
+        if (done) return;
+        done = true;
+        document.removeEventListener('keydown', onKey, true);
+        try { ov.remove(); } catch (e) {}
+        resolve(v);
+      }
+      function onKey(e) {
+        if (e.key === 'Escape') { e.preventDefault(); close(null); }
+        else if (e.key === 'Enter') { e.preventDefault(); close(inp.value); }
+      }
+      document.addEventListener('keydown', onKey, true);
+      ok.addEventListener('click', function () { close(inp.value); });
+      no.addEventListener('click', function () { close(null); });
+      ov.addEventListener('click', function (e) { if (e.target === ov) close(null); });
+      setTimeout(function () { try { inp.focus(); inp.select(); } catch (e) {} }, 30);
+    });
+  }
+
+  async function renameSession() {
     const p = currentProject();
     if (!p) return;
     const s = currentSessionObj();
     if (!s) return;
-    const name = window.prompt ? window.prompt('会话名称', s.name || '') : null;
+    const name = await askText('重命名会话', s.name || '', '比如：塔防-改角色');
     if (name === null) return;
     const t = String(name).trim();
     if (!t) return;
@@ -1118,7 +1190,7 @@
     s.updatedAt = Date.now();
     saveProjects();
     renderSessionSelect();
-    setStatus('已重命名');
+    setStatus('已重命名为：' + s.name);
   }
   function deleteSession() {
     const p = currentProject();

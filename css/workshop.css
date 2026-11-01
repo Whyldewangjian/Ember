@@ -1356,3 +1356,22 @@
 /* ★ 会话下拉：比模型下拉窄一点 */
 #agentMode .ag-session-sel { max-width: 160px; }
 #agentMode .ag-sess-btn { padding: 2px 7px; margin-left: 2px; }
+/* ★ 自建的输入框（Electron 不支持 window.prompt） */
+.ag-ask-overlay {
+  position: fixed; inset: 0; z-index: 10050;
+  background: rgba(0, 0, 0, .55);
+  display: flex; align-items: center; justify-content: center;
+}
+.ag-ask-box {
+  width: min(420px, 90vw);
+  background: #16212b; border: 1px solid #2c3d4a; border-radius: 10px;
+  padding: 16px 18px 14px; box-shadow: 0 18px 50px rgba(0, 0, 0, .5);
+}
+.ag-ask-title { font-size: 13px; color: #cfdde6; margin-bottom: 10px; }
+.ag-ask-input {
+  width: 100%; box-sizing: border-box;
+  background: #0d1620; border: 1px solid #2c3d4a; border-radius: 6px;
+  color: #e7f0f5; font: inherit; font-size: 13px; padding: 7px 9px; outline: none;
+}
+.ag-ask-input:focus { border-color: #4a7a9a; }
+.ag-ask-row { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
