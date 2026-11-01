@@ -955,6 +955,69 @@ ipcMain.handle('agent-delete', async (event, p) => {
   } catch (e) { return { ok: false, error: e.message || String(e) }; }
 });
 
+// ★ 清空文件夹：先列清单（给用户确认），再按"用户看到的清单"逐项删。
+//   为什么这么做：1.3.7 禁止了 shell 管道删除，Agent 只能一个文件一个文件调 delete，
+//   清空 50 个文件就要确认 50 次。这里用"列清单 → 一次确认 → 整批删"来兼顾安全和效率。
+ipcMain.handle('agent-clear-folder', async (event, dir, opts) => {
+  try {
+    const np = agentNorm(dir);
+    if (!agentInside(np)) return { ok: false, error: '路径不在工作文件夹内' };
+    if (!fs.existsSync(np)) return { ok: false, error: '目录不存在' };
+    if (!fs.statSync(np).isDirectory()) return { ok: false, error: '这不是一个文件夹' };
+    // 不允许清空"工作文件夹根目录本身"之外的层级？这里允许根目录，但会保留 keep 列表
+    const keep = Array.isArray(opts && opts.keep) ? opts.keep.map(String) : [];
+    const keepLower = keep.map(function (k) { return k.toLowerCase(); });
+    const items = [];
+    let totalBytes = 0;
+    let skipped = [];
+    fs.readdirSync(np, { withFileTypes: true }).forEach(function (d) {
+      const full = path.join(np, d.name);
+      if (keepLower.indexOf(d.name.toLowerCase()) >= 0) { skipped.push(d.name); return; }
+      let size = 0;
+      try {
+        if (d.isDirectory()) {
+          size = (function walk(p) {
+            let s = 0;
+            for (const e of fs.readdirSync(p, { withFileTypes: true })) {
+              const fp = path.join(p, e.name);
+              try { s += e.isDirectory() ? walk(fp) : fs.statSync(fp).size; } catch (err) {}
+            }
+            return s;
+          })(full);
+        } else {
+          size = fs.statSync(full).size;
+        }
+      } catch (e) {}
+      totalBytes += size;
+      items.push({ name: d.name, path: full, dir: d.isDirectory(), size: size });
+    });
+
+    // 没给 execute 就只返回清单（预览）
+    if (!(opts && opts.execute)) {
+      return { ok: true, preview: true, dir: np, items: items, keep: skipped, totalBytes: totalBytes };
+    }
+
+    // 执行删除：只删清单里那些（调用方把清单原样传回来，避免 TOCTOU）
+    const wanted = Array.isArray(opts.paths) && opts.paths.length
+      ? opts.paths.map(agentNorm)
+      : items.map(function (x) { return x.path; });
+    const okList = [], failList = [];
+    wanted.forEach(function (p2) {
+      try {
+        if (!agentInside(p2)) { failList.push({ path: p2, error: '不在工作文件夹内' }); return; }
+        if (!fs.existsSync(p2)) { return; }
+        const st = fs.statSync(p2);
+        if (st.isDirectory()) fs.rmSync(p2, { recursive: true, force: true });
+        else fs.unlinkSync(p2);
+        okList.push(p2);
+      } catch (e) {
+        failList.push({ path: p2, error: (e && e.message) || String(e) });
+      }
+    });
+    return { ok: failList.length === 0, deleted: okList.length, failed: failList, dir: np };
+  } catch (e) { return { ok: false, error: (e && e.message) || String(e) }; }
+});
+
 ipcMain.handle('agent-rename', async (event, from, to) => {
   try {
     const nf = agentNorm(from);

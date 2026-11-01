@@ -152,12 +152,21 @@ function run(cmd, waitSec) {
       const output = outBuf;
       // ★ 把明显的失败行挑出来单独返回。
       //   否则模型容易只看"命令跑完了"就总结成"已全部完成"，而实际有项目没删掉/没写成。
+      //   规则收紧过一轮：以前只要出现"失败/错误/exception"就算，
+      //   但 npm 正常输出里也可能带这些词，误报会让模型以为失败了。
+      const FAIL_RE = new RegExp([
+        '无法删除', 'cannot (be )?remove', 'being used by another process', '正在被另一进程使用',
+        '拒绝访问', 'access is denied', 'access denied',
+        'could not find', 'does not exist', '不是内部或外部命令', 'is not recognized',
+        '^\\s*(?:npm )?error\\b', '^\\s*Error\\b', '\\bFATAL\\b', '\\bERR_[A-Z0-9_]+',
+        'EACCES', 'EPERM', 'ENOENT', '权限不足'
+      ].join('|'), 'i');
       const failed = [];
       const lines = output.split(/\r?\n/);
       for (let i = 0; i < lines.length; i++) {
         const l = lines[i];
         if (!l.trim()) continue;
-        if (/无法删除|cannot (be )?remove|being used by another process|正在被另一进程使用|拒绝访问|access is denied|access denied|could not find|does not exist|不是内部或外部命令|is not recognized|error:|错误:|exception|失败/i.test(l)) {
+        if (FAIL_RE.test(l)) {
           if (failed.length < 12) failed.push(l.trim().slice(0, 200));
         }
       }

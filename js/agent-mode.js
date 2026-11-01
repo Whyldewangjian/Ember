@@ -326,8 +326,12 @@
       imgs.forEach(function (src) {
         if (!src) return;
         const img = document.createElement('img');
-        img.src = src;
         img.className = 'ag-user-img';
+        // ★ 历史里的图是按磁盘路径加载的，文件被删了就显示破图 —— 这里直接收起来
+        img.addEventListener('error', function () {
+          try { img.style.display = 'none'; } catch (e) {}
+        });
+        img.src = src;
         strip.appendChild(img);
       });
       if (strip.children.length) b.appendChild(strip);
@@ -1786,6 +1790,23 @@
         required: ['cmd']
       }
     } },
+    // ★ 清空文件夹：一次列出清单 + 一次确认 + 整批删除
+    //   给"把工作文件夹清空重做"这种需求用，比逐个 delete 快得多，也比 shell 管道删除安全。
+    { type: 'function', function: {
+      name: 'clear-folder',
+      description: '清空一个文件夹里的内容（保留文件夹本身）。'
+        + '先只列出将被删除的条目给你确认，用户确认后才真正删除。'
+        + '可以用 keep 指定要保留的名字（比如 assets、skills、phaser.min.js）。'
+        + '比逐个调 delete 快得多；也优于 shell 管道删除（那种会被拒绝）。',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: '要清空的文件夹绝对路径' },
+          keep: { type: 'array', items: { type: 'string' }, description: '要保留的文件/文件夹名字列表（只写名字，不写路径）' }
+        },
+        required: ['path']
+      }
+    } },
   ];
 
   // ---------- 流式解析（SSE）----------
@@ -2725,6 +2746,84 @@
       msgs.push({ role: 'user', content: '工具结果(grep)：\n' + cap(txt, 20000) });
       return;
     }
+    if (a === 'clear-folder' || a === 'clear_folder') {
+      const dirPath = String(c.path || '').trim();
+      const keep = Array.isArray(c.keep) ? c.keep : [];
+      if (!dirPath) {
+        pushAssistant();
+        msgs.push({ role: 'user', content: '工具结果(clear-folder)：path 不能为空。' });
+        return;
+      }
+      if (currentBubble) addActivity(currentBubble, '🧹 清空文件夹 ' + (relOf(dirPath) || dirPath));
+      let preview = null;
+      try {
+        preview = ipc ? await ipc.invoke('agent-clear-folder', dirPath, { keep: keep }) : null;
+      } catch (e) { preview = { ok: false, error: (e && e.message) || String(e) }; }
+
+      if (!preview || !preview.ok) {
+        const t = '[失败] ' + ((preview && preview.error) || '无法读取目录');
+        if (currentBubble) addActivity(currentBubble, '⚠ ' + t);
+        pushAssistant();
+        msgs.push({ role: 'user', content: '工具结果(clear-folder)：' + t });
+        return;
+      }
+
+      const items = preview.items || [];
+      if (!items.length) {
+        if (currentBubble) addActivity(currentBubble, '✅ 目录已经是空的');
+        pushAssistant();
+        msgs.push({ role: 'user', content: '工具结果(clear-folder)：目录已经是空的，没有可删内容。' });
+        return;
+      }
+
+      // ★ 让用户确认（一次），列清楚删什么、留什么、多大
+      const mb = function (n) { return (Math.round(n / 1048576 * 10) / 10) + ' MB'; };
+      const names = items.slice(0, 30).map(function (x) {
+        return '  ' + (x.dir ? '📁 ' : '📄 ') + x.name + '  (' + mb(x.size) + ')';
+      }).join('\n') + (items.length > 30 ? '\n  …还有 ' + (items.length - 30) + ' 项' : '');
+      const keepTxt = (preview.keep && preview.keep.length) ? ('\n\n保留：' + preview.keep.join('、')) : '';
+      const okDel = (typeof showConfirm === 'function')
+        ? await showConfirm('将清空 ' + (relOf(dirPath) || dirPath) + '：\n\n' + names
+          + '\n\n共 ' + items.length + ' 项，' + mb(preview.totalBytes) + keepTxt
+          + '\n\n删除后无法恢复。', { danger: true, okLabel: '确认清空' })
+        : false;
+
+      if (!okDel) {
+        if (currentBubble) addActivity(currentBubble, '✋ 用户取消了清空');
+        pushAssistant();
+        msgs.push({ role: 'user', content: '工具结果(clear-folder)：用户取消了这次清空，什么都没删。不要重试，问用户接下来怎么办。' });
+        return;
+      }
+
+      let res = null;
+      try {
+        res = await ipc.invoke('agent-clear-folder', dirPath, {
+          execute: true,
+          keep: keep,
+          paths: items.map(function (x) { return x.path; })
+        });
+      } catch (e) { res = { ok: false, error: (e && e.message) || String(e) }; }
+
+      const deleted = (res && res.deleted) || 0;
+      const failed = (res && res.failed) || [];
+      if (currentBubble) {
+        addActivity(currentBubble, failed.length
+          ? ('⚠ 删除 ' + deleted + ' 项，' + failed.length + ' 项失败')
+          : ('✅ 已清空 ' + deleted + ' 项'));
+      }
+      const failTxt = failed.length
+        ? ('\n\n失败项：\n' + failed.slice(0, 10).map(function (f) { return '  ' + f.path + '：' + f.error; }).join('\n'))
+        : '';
+      pushAssistant();
+      msgs.push({
+        role: 'user',
+        content: '工具结果(clear-folder)：用户已确认，删除 ' + deleted + ' 项' + (failed.length ? '，失败 ' + failed.length + ' 项' : '') + '。'
+          + failTxt
+          + (failed.length ? '\n\n报告时必须逐条说明哪一项没删掉、为什么，不许说"已全部清空"。' : '\n可以继续下一步了。')
+      });
+      return;
+    }
+
     if (a === 'shell') {
       const cmd = String(c.cmd || '');
       const wait = Math.min(20, Math.max(0.3, Number(c.wait) || 3));
