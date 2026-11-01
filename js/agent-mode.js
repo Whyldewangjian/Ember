@@ -391,6 +391,89 @@
     bubble.appendChild(div);
     scrollChat();
   }
+  // ---------- 轻量 Markdown → HTML ----------
+  // 为什么要自己写：Electron 里不想再引第三方库，而模型输出里常见的就是
+  // 代码块 / 标题 / 列表 / 粗体 / 行内代码 / 链接 这几样，覆盖它们就够用了。
+  // 安全：先整体转义，再按行处理，绝不把原始 HTML 注进 DOM。
+  function escHtml(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+  function mdInline(s) {
+    return s
+      .replace(/`([^`]+)`/g, '<code>$1</code>')
+      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+      .replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>')
+      .replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>');
+  }
+  function mdToHtml(src) {
+    const lines = String(src == null ? '' : src).replace(/\r\n?/g, '\n').split('\n');
+    const out = [];
+    let inCode = false, codeLang = '', codeBuf = [], listType = '', paraBuf = [];
+
+    const flushPara = function () {
+      if (!paraBuf.length) return;
+      out.push('<p>' + paraBuf.map(function (l) { return mdInline(escHtml(l)); }).join('<br>') + '</p>');
+      paraBuf = [];
+    };
+    const closeList = function () {
+      if (listType) { out.push('</' + listType + '>'); listType = ''; }
+    };
+
+    for (let i = 0; i < lines.length; i++) {
+      const raw = lines[i];
+      const fence = raw.match(/^\s*```([\w+#.-]*)\s*$/);
+      if (fence) {
+        if (inCode) {
+          out.push('<pre><code' + (codeLang ? ' data-lang="' + escHtml(codeLang) + '"' : '') + '>'
+            + escHtml(codeBuf.join('\n')) + '</code></pre>');
+          inCode = false; codeBuf = []; codeLang = '';
+        } else {
+          flushPara(); closeList();
+          inCode = true; codeLang = fence[1] || '';
+        }
+        continue;
+      }
+      if (inCode) { codeBuf.push(raw); continue; }
+
+      if (!raw.trim()) { flushPara(); closeList(); continue; }
+
+      const h = raw.match(/^(#{1,4})\s+(.*)$/);
+      if (h) {
+        flushPara(); closeList();
+        const lv = Math.min(6, h[1].length + 2);   // # → h3（气泡里不需要 h1）
+        out.push('<h' + lv + '>' + mdInline(escHtml(h[2])) + '</h' + lv + '>');
+        continue;
+      }
+
+      const ul = raw.match(/^\s*[-*+]\s+(.*)$/);
+      const ol = raw.match(/^\s*\d+[.)]\s+(.*)$/);
+      if (ul || ol) {
+        flushPara();
+        const want = ul ? 'ul' : 'ol';
+        if (listType !== want) { closeList(); out.push('<' + want + '>'); listType = want; }
+        out.push('<li>' + mdInline(escHtml((ul || ol)[1])) + '</li>');
+        continue;
+      }
+
+      const quote = raw.match(/^\s*>\s?(.*)$/);
+      if (quote) {
+        flushPara(); closeList();
+        out.push('<blockquote>' + mdInline(escHtml(quote[1])) + '</blockquote>');
+        continue;
+      }
+
+      paraBuf.push(raw);
+    }
+
+    if (inCode) {
+      out.push('<pre><code>' + escHtml(codeBuf.join('\n')) + '</code></pre>');
+    }
+    flushPara(); closeList();
+    return out.join('\n');
+  }
+
   function setBubbleText(bubble, text) {
     // ★ 追加「结论」块，而不是清空气泡——否则读取/拒绝/修改等操作流水会被抹掉
     setThinking(bubble, false);
@@ -399,7 +482,8 @@
     if (live) live.remove();
     let el = bubble.querySelector('.ag-final');
     if (!el) { el = document.createElement('div'); el.className = 'ag-final'; bubble.appendChild(el); }
-    el.textContent = text;
+    // ★ 用 Markdown 渲染（代码块、标题、列表、粗体），否则模型写的格式全是星号
+    try { el.innerHTML = mdToHtml(text); } catch (e) { el.textContent = text; }
     scrollChat();
   }
 
@@ -768,9 +852,23 @@
     const p = currentProject();
     if (!p) return;
     p.roots = roots;
-    p.history = (history.length > AGENT_HISTORY_MAX)
+    const trimmedH = (history.length > AGENT_HISTORY_MAX)
       ? history.slice(history.length - AGENT_HISTORY_MAX)
       : history;
+    p.history = trimmedH;              // 兼容：保留一份"当前会话"的镜像
+    // ★ 写进当前会话（会话列表靠这个）
+    try {
+      ensureSessions(p);
+      const s = p.sessions.find(function (x) { return x.id === p.sessionId; });
+      if (s) {
+        s.history = trimmedH;
+        s.updatedAt = Date.now();
+        if (!s.name || s.name === '默认会话' || s.name === '未命名会话') {
+          const t = sessionTitleFromHistory(trimmedH);
+          if (t) s.name = t;
+        }
+      }
+    } catch (e) {}
     p.presetId = activePresetId || '';
     try { p.imageApiId = currentImageApiId(); } catch (e) {}   // ★ 生图模型按项目保存
     saveProjects();
@@ -818,7 +916,11 @@
     if (!p) return;
     activeProjectId = p.id;
     roots = Array.isArray(p.roots) ? p.roots : [];
-    history = Array.isArray(p.history) ? p.history : [];
+    // ★ 会话：一个项目可以有多个会话，history 始终指向"当前会话"那段历史
+    ensureSessions(p);
+    const sess = p.sessions.find(function (s) { return s.id === p.sessionId; }) || p.sessions[0];
+    p.sessionId = sess.id;
+    history = sess.history;
     activePresetId = p.presetId || '';
     proposals = [];
     turnTouched = [];
@@ -826,6 +928,7 @@
     try { renderProposals(); } catch (e) {}
     renderProjectSelect();
     renderPresetSelect();
+    try { renderSessionSelect(); } catch (e) {}
     try { renderImageModelSelect(); } catch (e) {}   // ★ 生图模型跟着项目走
     renderRoots();
     // ★ 正在跑的时候不要重绘对话：
@@ -898,6 +1001,142 @@
   // ★ 之前 history 只存在内存里，关掉程序就全丢。这里补上 localStorage 持久化。
   const AGENT_HISTORY_KEY = 'llm_agent_history';
   const AGENT_HISTORY_MAX = 40;   // 最多保留多少条消息（20 轮；太多会让模型被自己的旧话带偏）
+
+  // ---------- 会话（一个项目里可以有多段互相独立的对话）----------
+  const SESSION_MAX = 20;   // 每个项目最多保留 20 个会话，超了删最老的
+
+  function newSessionId() {
+    return 's' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  }
+  function sessionTitleFromHistory(h) {
+    for (let i = 0; i < (h || []).length; i++) {
+      const m = h[i];
+      if (m && m.role === 'user' && typeof m.content === 'string') {
+        const t = m.content.replace(/\s+/g, ' ').trim();
+        if (t) return t.slice(0, 18) + (t.length > 18 ? '…' : '');
+      }
+    }
+    return '';
+  }
+  // 老项目没有 sessions → 用它原来的 history 迁移成第一个会话
+  function ensureSessions(p) {
+    if (!p) return null;
+    if (!Array.isArray(p.sessions) || !p.sessions.length) {
+      const old = Array.isArray(p.history) ? p.history : [];
+      p.sessions = [{
+        id: newSessionId(),
+        name: sessionTitleFromHistory(old) || '默认会话',
+        history: old,
+        createdAt: Date.now(),
+        updatedAt: Date.now()
+      }];
+      p.sessionId = p.sessions[0].id;
+    }
+    if (!p.sessions.some(function (s) { return s.id === p.sessionId; })) {
+      p.sessionId = p.sessions[0].id;
+    }
+    p.sessions.forEach(function (s) {
+      if (!Array.isArray(s.history)) s.history = [];
+      if (!s.name) s.name = sessionTitleFromHistory(s.history) || '未命名会话';
+      if (!s.createdAt) s.createdAt = Date.now();
+    });
+    return p;
+  }
+  function currentSessionObj() {
+    const p = currentProject();
+    if (!p) return null;
+    ensureSessions(p);
+    return p.sessions.find(function (s) { return s.id === p.sessionId; }) || p.sessions[0] || null;
+  }
+  function renderSessionSelect() {
+    const sel = document.getElementById('agSessionSelect');
+    if (!sel) return;
+    const p = currentProject();
+    if (!p) { sel.innerHTML = ''; return; }
+    ensureSessions(p);
+    sel.innerHTML = '';
+    p.sessions.forEach(function (s) {
+      const o = document.createElement('option');
+      o.value = s.id;
+      o.textContent = (s.name || '未命名会话') + (s.history && s.history.length ? '' : '（空）');
+      sel.appendChild(o);
+    });
+    sel.value = p.sessionId;
+  }
+  function switchSession(id) {
+    const p = currentProject();
+    if (!p) return;
+    ensureSessions(p);
+    if (!p.sessions.some(function (s) { return s.id === id; })) return;
+    if (running) { setStatus('正在运行，先别切会话'); renderSessionSelect(); return; }
+    persistActiveProject();            // 先把当前会话写回去
+    p.sessionId = id;
+    const s = p.sessions.find(function (x) { return x.id === id; });
+    history = s.history;
+    saveProjects();
+    renderSessionSelect();
+    renderHistory();
+    setStatus('已切换到：' + (s.name || '未命名会话'));
+  }
+  function newSession() {
+    const p = currentProject();
+    if (!p) { setStatus('先选一个项目'); return; }
+    if (running) { setStatus('正在运行，先别新建会话'); return; }
+    ensureSessions(p);
+    persistActiveProject();
+    const s = {
+      id: newSessionId(),
+      name: '新会话 ' + (p.sessions.length + 1),
+      history: [],
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    };
+    p.sessions.push(s);
+    // 超出上限：删最老且不是当前的那个
+    while (p.sessions.length > SESSION_MAX) {
+      const idx = p.sessions.findIndex(function (x) { return x.id !== p.sessionId && x.id !== s.id; });
+      if (idx < 0) break;
+      p.sessions.splice(idx, 1);
+    }
+    p.sessionId = s.id;
+    history = s.history;
+    saveProjects();
+    renderSessionSelect();
+    renderHistory();
+    setStatus('已新建会话');
+  }
+  function renameSession() {
+    const p = currentProject();
+    if (!p) return;
+    const s = currentSessionObj();
+    if (!s) return;
+    const name = window.prompt ? window.prompt('会话名称', s.name || '') : null;
+    if (name === null) return;
+    const t = String(name).trim();
+    if (!t) return;
+    s.name = t.slice(0, 40);
+    s.updatedAt = Date.now();
+    saveProjects();
+    renderSessionSelect();
+    setStatus('已重命名');
+  }
+  function deleteSession() {
+    const p = currentProject();
+    if (!p) return;
+    ensureSessions(p);
+    if (running) { setStatus('正在运行，先别删会话'); return; }
+    if (p.sessions.length <= 1) { setStatus('至少保留一个会话'); return; }
+    const s = currentSessionObj();
+    if (!s) return;
+    const idx = p.sessions.indexOf(s);
+    p.sessions.splice(idx, 1);
+    p.sessionId = p.sessions[Math.max(0, idx - 1)].id;
+    history = p.sessions.find(function (x) { return x.id === p.sessionId; }).history;
+    saveProjects();
+    renderSessionSelect();
+    renderHistory();
+    setStatus('已删除会话');
+  }
 
   function saveHistory() {
     // ★ 对话现在存在"项目"里，每个项目独立一段
@@ -3215,9 +3454,22 @@
   const agAttachBtn = document.getElementById('agAttachBtn');
   if (agAttachBtn) agAttachBtn.addEventListener('click', function () { pickAttachments(); });
 
+  // ★ 会话：切换 / 新建 / 重命名 / 删除
+  const agSessionSelect = document.getElementById('agSessionSelect');
+  if (agSessionSelect) {
+    agSessionSelect.addEventListener('change', function () { switchSession(this.value); });
+  }
+  const agSessionNew = document.getElementById('agSessionNew');
+  if (agSessionNew) agSessionNew.addEventListener('click', function () { newSession(); });
+  const agSessionRename = document.getElementById('agSessionRename');
+  if (agSessionRename) agSessionRename.addEventListener('click', function () { renameSession(); });
+  const agSessionDel = document.getElementById('agSessionDel');
+  if (agSessionDel) agSessionDel.addEventListener('click', function () { deleteSession(); });
+
   // 初始渲染
   renderRoots();
   renderTree();
   updateChatEmpty();
   refreshAssets();     // 首屏就把资产索引加载好，@ 列表才有内容
+  try { renderSessionSelect(); } catch (e) {}
 })();
