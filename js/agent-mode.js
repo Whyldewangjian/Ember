@@ -1790,7 +1790,20 @@
         required: ['cmd']
       }
     } },
-    // ★ 清空文件夹：一次列出清单 + 一次确认 + 整批删除
+    // ★ 参考图 → 色板：把"看图猜配色"变成"量出具体色值"
+    { type: 'function', function: {
+      name: 'analyze-palette',
+      description: '从一张参考图里提取色板：主色相、每个色相的 5 档色值、大面积基色饱和度、强调色占比，'
+        + '直接产出一张可以贴进 PRD 第 7 章的色板表。做像素/2D 游戏、用户给了参考图时，'
+        + '开工前先用它，按量出来的色值画，不要凭感觉配色。',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: '参考图绝对路径（png/jpg/webp）' }
+        },
+        required: ['path']
+      }
+    } },    // ★ 清空文件夹：一次列出清单 + 一次确认 + 整批删除
     //   给"把工作文件夹清空重做"这种需求用，比逐个 delete 快得多，也比 shell 管道删除安全。
     { type: 'function', function: {
       name: 'clear-folder',
@@ -2744,6 +2757,48 @@
       }
       pushAssistant();
       msgs.push({ role: 'user', content: '工具结果(grep)：\n' + cap(txt, 20000) });
+      return;
+    }
+    if (a === 'analyze-palette' || a === 'analyze_palette') {
+      const imgPath = String(c.path || '').trim();
+      if (!imgPath) {
+        pushAssistant();
+        msgs.push({ role: 'user', content: '工具结果(analyze-palette)：path 不能为空。' });
+        return;
+      }
+      if (currentBubble) addActivity(currentBubble, '🎨 提取色板 ' + (relOf(imgPath) || imgPath));
+      let r = null;
+      try {
+        r = ipc ? await ipc.invoke('agent-analyze-palette', imgPath) : null;
+      } catch (e) { r = { ok: false, error: (e && e.message) || String(e) }; }
+      if (!r || !r.ok) {
+        const t = '[失败] ' + ((r && r.error) || '无法分析');
+        if (currentBubble) addActivity(currentBubble, '⚠ ' + t);
+        pushAssistant();
+        msgs.push({ role: 'user', content: '工具结果(analyze-palette)：' + t });
+        return;
+      }
+      const md = String(r.markdown || '');
+      const s = (r.json && r.json.stats) || {};
+      if (currentBubble) {
+        addActivity(currentBubble, '✅ 色板已提取（' + (r.json ? r.json.hues.length : 0) + ' 个色相，平均饱和 '
+          + (s.avgSat || 0) + '%）');
+        // 在气泡里直接显示这张表，用户能马上判断像不像
+        try {
+          const box = document.createElement('div');
+          box.className = 'ag-palette';
+          box.innerHTML = mdToHtml(md);
+          currentBubble.appendChild(box);
+          scrollChat();
+        } catch (e) {}
+      }
+      pushAssistant();
+      msgs.push({
+        role: 'user',
+        content: '工具结果(analyze-palette)：\n' + md + '\n\n'
+          + '请把这张色板表**原样写进 PRD 第 7 章**（视觉规范），并说明每个色相用在哪里；'
+          + '如果表里提示了"偏灰"或"高饱和面积不足"，按提示把饱和度整体提上去再写。'
+      });
       return;
     }
     if (a === 'clear-folder' || a === 'clear_folder') {

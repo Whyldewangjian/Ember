@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, screen, dialog, Menu, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, screen, dialog, Menu, shell, nativeImage } = require('electron');
 
 const path = require('path');
 const fs = require('fs');
@@ -8,6 +8,7 @@ const docBuild = require('./js/doc-build');
 const browserModule = require('./js/browser-window');
 const updateModule = require('./js/update-check');
 const githubAuthModule = require('./js/github-auth');
+const colorPalette = require('./js/color-palette');
 const pageCheckModule = require('./js/page-check');
 const agentShellModule = require('./js/agent-shell');
 
@@ -943,6 +944,28 @@ ipcMain.handle('doc-create-xlsx', async (event, p, sheets) => {
 
 
 
+// ★ 从参考图提取色板：让模型不用"感觉配色"，直接拿到具体色值
+ipcMain.handle('agent-analyze-palette', async (event, p) => {
+  try {
+    const np = agentNorm(p);
+    if (!agentInside(np)) return { ok: false, error: '路径不在工作文件夹内' };
+    if (!fs.existsSync(np)) return { ok: false, error: '图片不存在' };
+    const img = nativeImage.createFromPath(np);
+    if (!img || img.isEmpty()) return { ok: false, error: '读不出这张图（格式不支持或已损坏）' };
+    const size = img.getSize();
+    const bmp = img.toBitmap();
+    const pal = colorPalette.extractPalette(bmp, size.width, size.height);
+    if (!pal) return { ok: false, error: '这张图里没有可用颜色' };
+    return {
+      ok: true,
+      file: np,
+      width: size.width,
+      height: size.height,
+      markdown: colorPalette.paletteMarkdown(pal, path.basename(np)),
+      json: pal
+    };
+  } catch (e) { return { ok: false, error: (e && e.message) || String(e) }; }
+});
 ipcMain.handle('agent-delete', async (event, p) => {
   try {
     const np = agentNorm(p);

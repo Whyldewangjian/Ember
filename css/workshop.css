@@ -1375,3 +1375,21 @@
 }
 .ag-ask-input:focus { border-color: #4a7a9a; }
 .ag-ask-row { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+/* ★ 气泡里的色板卡片（analyze-palette 的结果） */
+.ag-palette {
+  margin: 8px 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #101a22;
+  border: 1px solid #22303f;
+  font-size: 11.5px;
+  overflow-x: auto;
+}
+.ag-palette h3 { font-size: 12px; margin: 0 0 6px; color: #cfe0e8; }
+.ag-palette table { border-collapse: collapse; width: 100%; }
+.ag-palette th, .ag-palette td {
+  border: 1px solid #22303f; padding: 4px 6px; text-align: left;
+  white-space: nowrap; font-size: 11px;
+}
+.ag-palette th { background: #16232e; color: #9fb4c0; font-weight: 600; }
+.ag-palette strong { color: #ffd9a0; }
