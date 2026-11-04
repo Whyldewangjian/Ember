@@ -1800,7 +1800,7 @@
     { type: 'function', function: {
       name: 'create-pptx',
       description: '生成一份 .pptx 演示文稿。版式由程序控制（不用你算坐标），你只填内容。'
-        + '可用版式：cover / bullets / two-col / image-text / table / big-number / end。'
+        + '可用版式（10 个）：cover / bullets / two-col / image-text / table / big-number / cards / timeline / quote / end。'
         + '文字放不下时会自动降字号、必要时自动续页，所以不要为了放得下而删内容。'
         + '生成后会返回警告列表（哪些页做了降字号或续页）。',
       parameters: {
@@ -1816,7 +1816,10 @@
               + 'two-col{title,subtitle,left{title,items[]},right{title,items[]},takeaway}｜'
               + 'image-text{title,subtitle,bullets[],image,imageHint,takeaway}｜'
               + 'table{title,subtitle,table[][],note,takeaway}｜'
-              + 'big-number{title,subtitle,numbers[{value,label,desc}],takeaway}｜end{title,subtitle}',
+              + 'big-number{title,subtitle,numbers[{value,label,desc}],takeaway}｜'
+              + 'cards{title,subtitle,cards[{icon,title,desc}],takeaway}（icon: target/layers/chart/clock/check/spark）｜'
+              + 'timeline{title,subtitle,points[{time,title,desc}],takeaway}｜'
+              + 'quote{text,by}｜end{title,subtitle}',
             items: { type: 'object', additionalProperties: true }
           }
         },

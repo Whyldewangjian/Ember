@@ -244,7 +244,9 @@ function makeBuilder(pptxgen) {
 
         // 图片区：给了路径就用图，没给就画占位框
         const rx = M + boxW + 0.7, ry = 1.95, rw = W - rx - M, rh = 3.6;
-        const imgPath = sl.image && fs.existsSync(sl.image) ? sl.image : '';
+        // ① 指定了就用指定的 ② 否则从 assets 里按标题匹配 ③ 都没有就占位
+        let imgPath = sl.image && fs.existsSync(sl.image) ? sl.image : '';
+        if (!imgPath) imgPath = findAutoImage(sl.title, sl.imageHint);
         if (imgPath) {
           try {
             s.addImage({ path: imgPath, x: rx, y: ry, w: rw, h: rh, sizing: { type: 'cover', w: rw, h: rh } });
@@ -332,8 +334,152 @@ function makeBuilder(pptxgen) {
         }
         s.addShape(pres.ShapeType.rect, { x: (W - 1.4) / 2, y: 4.3, w: 1.4, h: 0.045, fill: { color: theme.accent } });
         notes.push({ layout: 'end' });
+      },
+
+      // 三卡：图标 + 标题 + 说明（用 12 列栅格定位）
+      cards: function (sl) {
+        const s = pres.addSlide();
+        head(s, sl.title || '', sl.subtitle, true, 0, 0);
+        const items = (sl.cards || []).slice(0, 3);
+        if (!items.length) return;
+        const n = items.length;
+        const colSpan = Math.floor(GRID_COLS / n);
+        const cw = colSpan * (W - M * 2) / GRID_COLS - 0.35;
+        const top = 1.95, chh = 3.15;
+        items.forEach(function (c2, i) {
+          const x = M + i * (cw + 0.35) + i * 0.1;
+          s.addShape(pres.ShapeType.rect, { x: x, y: top, w: cw, h: chh, fill: { color: theme.soft }, line: { color: theme.line, width: 1 } });
+          s.addShape(pres.ShapeType.rect, { x: x, y: top, w: cw, h: 0.05, fill: { color: theme.accent } });
+          drawIcon(s, c2.icon || ['target', 'layers', 'chart'][i % 3], x + 0.32, top + 0.3, 0.44);
+          s.addText(String(c2.title || ''), {
+            x: x + 0.32, y: top + 0.92, w: cw - 0.64, h: 0.55, fontSize: SIZE.h3, bold: true,
+            color: theme.ink, fontFace: theme.font
+          });
+          const pt = fitSize([String(c2.desc || '')], cw - 0.64, 1.5, SIZE.body, 10, 1.45);
+          s.addText(String(c2.desc || ''), {
+            x: x + 0.32, y: top + 1.55, w: cw - 0.64, h: 1.6, fontSize: pt > 0 ? pt : 10,
+            color: theme.sub, fontFace: theme.font, lineSpacingMultiple: 1.45, valign: 'top'
+          });
+        });
+        takeaway(s, sl.takeaway);
+        notes.push({ layout: 'cards', count: n });
+      },
+
+      // 时间轴：一条横线 + 3~5 个节点
+      timeline: function (sl) {
+        const s = pres.addSlide();
+        head(s, sl.title || '', sl.subtitle, true, 0, 0);
+        const pts = (sl.points || []).slice(0, 5);
+        if (!pts.length) return;
+        const lineY = 3.55;
+        const x0 = M + 1.1, x1 = W - M - 1.1;
+        s.addShape(pres.ShapeType.rect, { x: x0, y: lineY, w: x1 - x0, h: 0.035, fill: { color: theme.line } });
+        const step = pts.length > 1 ? (x1 - x0) / (pts.length - 1) : 0;
+        pts.forEach(function (p, i) {
+          const cx = x0 + step * i;
+          s.addShape(pres.ShapeType.ellipse, {
+            x: cx - 0.14, y: lineY - 0.12, w: 0.28, h: 0.28, fill: { color: theme.accent }
+          });
+          s.addText(String(p.time || ''), {
+            x: cx - 0.9, y: lineY - 0.85, w: 1.8, h: 0.4, fontSize: SIZE.body + 1, bold: true,
+            color: theme.accent, align: 'center', fontFace: theme.font
+          });
+          s.addText(String(p.title || ''), {
+            x: cx - 1.0, y: lineY + 0.28, w: 2.0, h: 0.45, fontSize: SIZE.h3, bold: true,
+            color: theme.ink, align: 'center', fontFace: theme.font
+          });
+          if (p.desc) {
+            s.addText(String(p.desc), {
+              x: cx - 1.0, y: lineY + 0.75, w: 2.0, h: 1.1, fontSize: SIZE.body - 1, color: theme.sub,
+              align: 'center', fontFace: theme.font, lineSpacingMultiple: 1.4
+            });
+          }
+        });
+        takeaway(s, sl.takeaway);
+        notes.push({ layout: 'timeline', count: pts.length });
+      },
+
+      // 引用页
+      quote: function (sl) {
+        const s = pres.addSlide();
+        bg(s, theme.dark);
+        s.addShape(pres.ShapeType.rect, { x: 0, y: 0, w: 0.1, h: H, fill: { color: theme.accent } });
+        s.addText('“', {
+          x: 1.0, y: 1.5, w: 1.2, h: 1.1, fontSize: 68, bold: true, color: theme.accent, fontFace: 'Georgia'
+        });
+        const pt = fitSize([String(sl.text || '')], 10.4, 1.7, 25, 15, 1.45);
+        s.addText(String(sl.text || ''), {
+          x: 1.2, y: 2.65, w: 10.4, h: 1.7, fontSize: pt > 0 ? pt : 15, color: 'FFFFFF',
+          fontFace: theme.font, lineSpacingMultiple: 1.45
+        });
+        if (sl.by) {
+          s.addText('—— ' + String(sl.by), {
+            x: 1.25, y: 4.6, w: 8, h: 0.35, fontSize: SIZE.body - 1, color: '8B92A0', fontFace: theme.font
+          });
+        }
+        notes.push({ layout: 'quote' });
       }
     };
+
+    // ---------------- 图标（自绘 SVG，无第三方授权问题）----------------
+    const ICON_SVG = {
+      target: '<circle cx="24" cy="24" r="17" fill="none" stroke="{c}" stroke-width="3"/>'
+        + '<circle cx="24" cy="24" r="7" fill="none" stroke="{c}" stroke-width="3"/>'
+        + '<circle cx="24" cy="24" r="2.5" fill="{c}"/>',
+      layers: '<path d="M24 8 L42 18 L24 28 L6 18 Z" fill="none" stroke="{c}" stroke-width="3" stroke-linejoin="round"/>'
+        + '<path d="M6 26 L24 36 L42 26" fill="none" stroke="{c}" stroke-width="3" stroke-linejoin="round"/>',
+      chart: '<path d="M8 40 L8 10" stroke="{c}" stroke-width="3"/>'
+        + '<path d="M8 40 L42 40" stroke="{c}" stroke-width="3"/>'
+        + '<rect x="14" y="26" width="6" height="12" fill="none" stroke="{c}" stroke-width="3"/>'
+        + '<rect x="24" y="18" width="6" height="20" fill="none" stroke="{c}" stroke-width="3"/>'
+        + '<rect x="34" y="12" width="6" height="26" fill="none" stroke="{c}" stroke-width="3"/>',
+      clock: '<circle cx="24" cy="24" r="17" fill="none" stroke="{c}" stroke-width="3"/>'
+        + '<path d="M24 14 L24 25 L32 30" fill="none" stroke="{c}" stroke-width="3" stroke-linecap="round"/>',
+      check: '<circle cx="24" cy="24" r="17" fill="none" stroke="{c}" stroke-width="3"/>'
+        + '<path d="M16 25 L22 31 L33 18" fill="none" stroke="{c}" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/>',
+      spark: '<path d="M24 8 L27.5 20 L40 24 L27.5 28 L24 40 L20.5 28 L8 24 L20.5 20 Z" fill="none" stroke="{c}" stroke-width="2.6" stroke-linejoin="round"/>'
+    };
+    function drawIcon(s, name, x, y, size) {
+      const tpl = ICON_SVG[name] || ICON_SVG.target;
+      const color = '#' + theme.accent;
+      const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48">'
+        + tpl.replace(/\{c\}/g, color) + '</svg>';
+      const data = 'data:image/svg+xml;base64,' + Buffer.from(svg, 'utf8').toString('base64');
+      try {
+        s.addImage({ data: data, x: x, y: y, w: size, h: size });
+      } catch (e) {
+        s.addShape(pres.ShapeType.rect, { x: x, y: y, w: size, h: size, fill: { color: theme.accent } });
+      }
+    }
+
+    // ---------------- 自动配图：从工作文件夹的 assets 里找 ----------------
+    function findAutoImage(title, hint) {
+      const rootDir = spec.rootDir || '';
+      if (!rootDir || !fs.existsSync(rootDir)) return '';
+      const kw = String(hint || title || '').replace(/[^\u4e00-\u9fa5A-Za-z0-9]/g, '');
+      const cands = [];
+      (function walk(dir, depth) {
+        if (depth > 3) return;
+        let list = [];
+        try { list = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { return; }
+        list.forEach(function (d) {
+          const p = path.join(dir, d.name);
+          if (d.isDirectory()) { if (d.name !== 'node_modules' && d.name !== '.ember-backup') walk(p, depth + 1); }
+          else if (/\.(png|jpe?g|webp)$/i.test(d.name)) cands.push(p);
+        });
+      })(path.join(rootDir, 'assets'), 0);
+      if (!cands.length) return '';
+      // 文件名和标题有共同字/词就优先
+      const score = function (p) {
+        const base = path.basename(p).replace(/\.[^.]+$/, '').toLowerCase();
+        let s2 = 0;
+        for (const ch of kw) if (base.indexOf(ch) >= 0) s2++;
+        return s2;
+      };
+      cands.sort(function (a, b) { return score(b) - score(a); });
+      return cands[0];
+    }
+
 
     // ---------------- 逐页生成 ----------------
     const slides = Array.isArray(spec.slides) ? spec.slides : [];
