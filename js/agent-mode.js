@@ -3045,7 +3045,10 @@
         role: 'user',
         content: '工具结果(tileset-preview)：\n'
           + '索引：' + r.json + '\n预览：' + r.html + '\n'
-          + '共 ' + r.tiles + ' 个图块（' + r.cols + ' 列 × ' + r.rows + ' 行，每格 ' + tileSize + '）\n\n'
+          + '共 ' + r.tiles + ' 个图块（' + r.cols + ' 列 × ' + r.rows + ' 行，每格 ' + tileSize + '）\n'
+          + (r.byKind ? ('按颜色粗分（可直接参考，仍建议和用户确认）：\n'
+            + Object.keys(r.byKind).map(function (k) { return '  ' + k + '：' + r.byKind[k].join(','); }).join('\n') + '\n') : '')
+          + '\n'
           + '接下来：\n'
           + '1. 让用户打开预览页，报几个他想要的地块编号（比如 11=草地、21=水、66=土路）\n'
           + '2. 把名字写进 tiles.json 的 names 字段（{"11":"grass"}）\n'

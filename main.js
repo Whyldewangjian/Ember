@@ -1082,8 +1082,49 @@ ipcMain.handle('doc-tileset-preview', async (event, sheetPath, opt) => {
     const sp = agentNorm(sheetPath);
     if (!agentInside(sp)) return { ok: false, error: "路径不在工作文件夹内" };
     if (!fs.existsSync(sp)) return { ok: false, error: "图片不存在" };
-    const r = tileset.generate(sp, opt || {});
-    return { ok: true, json: r.json, html: r.html, tiles: r.index.tiles.length, cols: r.index.cols, rows: r.index.rows, snippet: tileset.DRAW_SNIPPET };
+    // 先把图块平均色算出来（nativeImage 解码，纯 JS 统计），这样索引里就带分类
+    let colors = [];
+    try {
+      const img = nativeImage.createFromPath(sp);
+      if (img && !img.isEmpty()) {
+        const sz = img.getSize();
+        const bmp = img.toBitmap();
+        const tile = Number((opt && opt.tileSize) || 16);
+        const cols = Number((opt && opt.cols) || Math.floor(sz.width / tile));
+        const rows = Number((opt && opt.rows) || Math.floor(sz.height / tile));
+        for (let r = 0; r < rows; r++) {
+          for (let cc = 0; cc < cols; cc++) {
+            let sr = 0, sg = 0, sb = 0, n = 0;
+            for (let y = 0; y < tile; y++) {
+              for (let x = 0; x < tile; x++) {
+                const px = (r * tile + y) * sz.width + (cc * tile + x);
+                const i4 = px * 4;
+                if (i4 + 3 >= bmp.length) continue;
+                if (bmp[i4 + 3] < 30) continue;
+                sr += bmp[i4]; sg += bmp[i4 + 1]; sb += bmp[i4 + 2]; n++;
+              }
+            }
+            if (!n) { colors.push({ hex: '', kind: 'empty' }); continue; }
+            sr = Math.round(sr / n); sg = Math.round(sg / n); sb = Math.round(sb / n);
+            const hex = '#' + [sr, sg, sb].map(function (v) { return (v < 16 ? '0' : '') + v.toString(16); }).join('');
+            let kind = 'other';
+            if (sg > sr + 20 && sg > sb + 20) kind = 'green';
+            else if (sb > sr + 20 && sb > sg + 10) kind = 'blue';
+            else if (sr > 140 && sg < 100 && sb < 100) kind = 'red';
+            else if (sr > 110 && sg > 70 && sb < 100 && sr > sb + 40) kind = 'brown';
+            else if (Math.abs(sr - sg) < 20 && Math.abs(sg - sb) < 20) kind = 'gray';
+            colors.push({ hex: hex, kind: kind });
+          }
+        }
+      }
+    } catch (e2) {}
+    const opt2 = Object.assign({}, opt || {}, { colors: colors });
+    const r = tileset.generate(sp, opt2);
+    return {
+      ok: true, json: r.json, html: r.html,
+      tiles: r.index.tiles.length, cols: r.index.cols, rows: r.index.rows,
+      byKind: r.index.byKind, snippet: tileset.DRAW_SNIPPET
+    };
   } catch (e) { return { ok: false, error: (e && e.message) || String(e) }; }
 });
 

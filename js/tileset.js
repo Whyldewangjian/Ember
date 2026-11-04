@@ -23,15 +23,24 @@ function buildIndex(sheetPath, opt) {
   const tile = Number(opt.tileSize) || DEFAULT_TILE;
   const cols = Number(opt.cols) || 0;
   const rows = Number(opt.rows) || 0;
+  const colors = Array.isArray(opt.colors) ? opt.colors : [];   // 每块的平均色（主进程算好传进来）
   const tiles = [];
   if (cols > 0 && rows > 0) {
     let i = 0;
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
-        tiles.push({ i: i++, c: c, r: r });
+        const col = colors[i] || null;
+        tiles.push({ i: i++, c: c, r: r, hex: col ? col.hex : '', kind: col ? col.kind : '' });
       }
     }
   }
+  // 按"感觉"分好类，模型一眼能看出哪些编号是草/水/土/石
+  const byKind = {};
+  tiles.forEach(function (t) {
+    if (!t.kind) return;
+    if (!byKind[t.kind]) byKind[t.kind] = [];
+    byKind[t.kind].push(t.i);
+  });
   return {
     sheet: path.basename(sheetPath),
     sheetPath: sheetPath,
@@ -39,6 +48,7 @@ function buildIndex(sheetPath, opt) {
     cols: cols,
     rows: rows,
     tiles: tiles,
+    byKind: byKind,
     // 命名留空，等用户/Agent 对完预览页再填（比如 { "1": "grass", "2": "water" }）
     names: opt.names || {},
     attribution: opt.attribution || ''
@@ -114,6 +124,12 @@ function render() {
     ctx.imageSmoothingEnabled = false;
     ctx.drawImage(img, t.c * IDX.tileSize, t.r * IDX.tileSize, IDX.tileSize, IDX.tileSize, 0, 0, s, s);
     d.appendChild(cv);
+    if (t.hex) {
+      d.title = '#' + t.i + '  ' + (t.kind || '') + '  ' + t.hex;
+      const dot = document.createElement('span');
+      dot.style.cssText = 'position:absolute;right:1px;top:0;width:7px;height:7px;border:1px solid #000;background:' + t.hex;
+      d.appendChild(dot);
+    }
     const lab = document.createElement('span');
     lab.className = 'idx';
     const nm = IDX.names && IDX.names[t.i];
