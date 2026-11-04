@@ -93,6 +93,34 @@
 - 不做 sprite sheet 切图，帧就是数组
 - 逻辑 60fps，动画切换 6 到 10 帧每秒
 
+## 四.5、场景怎么画（有素材包时）
+
+**有 tileset 就不要再用代码画格子。**
+
+1. 先调 `tileset-preview`（sheet / tileSize / cols / rows），生成 `tiles.json` + 带编号的预览页
+2. 让用户打开预览页，报几个关键地块的编号（比如 11=草地、21=水、66=土路、19=灌木）
+3. 把这些名字写进 `tiles.json` 的 `names` 字段：`{"11":"grass","21":"water"}`
+4. 地图用**编号二维数组**表示，不要写像素坐标：
+
+```js
+const map = [
+  [11, 11, 12],
+  [66, 66, 12],
+  [21, 21, 12]
+];
+```
+
+5. 游戏里按编号贴图（精灵表方式，不切图）：
+
+```js
+this.load.spritesheet('terrain', 'assets/tiles/sheet.png',
+  { frameWidth: TILES.tileSize, frameHeight: TILES.tileSize });
+this.add.image(c * TILES.tileSize, r * TILES.tileSize, 'terrain', map[r][c]).setOrigin(0, 0);
+```
+
+**没有素材包时才退回代码绘制，并且要告诉用户"这是临时占位画面"。**
+
+**CC-BY 的素材必须在游戏里署名**（比如结尾或设置页放一行"素材来自 XXX"）。
 ## 五、技术规格
 
 - Phaser 3，物理用 Arcade；多文件用经典脚本（script src），不要用 ES module

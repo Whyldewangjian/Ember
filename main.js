@@ -11,6 +11,7 @@ const githubAuthModule = require('./js/github-auth');
 const colorPalette = require('./js/color-palette');
 const fileSnapshot = require('./js/file-snapshot');
 const pptxBuild = require('./js/pptx-build');
+const tileset = require('./js/tileset');
 const pptxgen = require('pptxgenjs');
 const pageCheckModule = require('./js/page-check');
 const agentShellModule = require('./js/agent-shell');
@@ -1072,6 +1073,17 @@ ipcMain.handle('doc-create-pptx', async (event, target, spec) => {
       warn: r.warn,
       size: fs.existsSync(np) ? fs.statSync(np).size : 0
     };
+  } catch (e) { return { ok: false, error: (e && e.message) || String(e) }; }
+});
+
+// ★ 素材包：生成 tiles.json + 预览页（用户对着编号给地块起名）
+ipcMain.handle('doc-tileset-preview', async (event, sheetPath, opt) => {
+  try {
+    const sp = agentNorm(sheetPath);
+    if (!agentInside(sp)) return { ok: false, error: "路径不在工作文件夹内" };
+    if (!fs.existsSync(sp)) return { ok: false, error: "图片不存在" };
+    const r = tileset.generate(sp, opt || {});
+    return { ok: true, json: r.json, html: r.html, tiles: r.index.tiles.length, cols: r.index.cols, rows: r.index.rows, snippet: tileset.DRAW_SNIPPET };
   } catch (e) { return { ok: false, error: (e && e.message) || String(e) }; }
 });
 

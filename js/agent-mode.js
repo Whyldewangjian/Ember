@@ -1796,6 +1796,25 @@
         required: ['cmd']
       }
     } },
+    // ★ 素材包：生成图块索引 + 带编号的预览页（拼地图前必须先做这步）
+    { type: 'function', function: {
+      name: 'tileset-preview',
+      description: '把一张素材图（tileset）做成可用索引：生成 tiles.json（每个图块的编号/行列）'
+        + '和一个带编号的预览页，方便用户对着挑地块。'
+        + '做场景前先调它，然后按编号拼地图；不要自己在游戏里写死像素坐标。',
+      parameters: {
+        type: 'object',
+        properties: {
+          sheet: { type: 'string', description: '素材图绝对路径（png）' },
+          tileSize: { type: 'number', description: '每格边长，默认 16' },
+          cols: { type: 'number', description: '横向格数（用图宽 / tileSize 得到）' },
+          rows: { type: 'number', description: '纵向格数（用图高 / tileSize 得到）' },
+          label: { type: 'string', description: '显示名，比如 tiny16 基础地形' },
+          attribution: { type: 'string', description: '素材署名（CC-BY 必须写）' }
+        },
+        required: ['sheet', 'cols', 'rows']
+      }
+    } },
     // ★ 生成 PPT（版式由代码控制，模型只填内容 —— 这样不会破版）
     { type: 'function', function: {
       name: 'create-pptx',
@@ -2979,6 +2998,63 @@
       msgs.push({ role: 'user', content: '工具结果(grep)：\n' + cap(txt, 20000) });
       return;
     }
+    if (a === 'tileset-preview' || a === 'tileset_preview') {
+      const sheet = String(c.sheet || '').trim();
+      const cols = parseInt(c.cols, 10), rows = parseInt(c.rows, 10);
+      const tileSize = parseInt(c.tileSize, 10) || 16;
+      if (!sheet || !(cols > 0) || !(rows > 0)) {
+        pushAssistant();
+        msgs.push({ role: 'user', content: '工具结果(tileset-preview)：sheet / cols / rows 都要给（cols=图宽/tileSize，rows=图高/tileSize）。' });
+        return;
+      }
+      if (currentBubble) addActivity(currentBubble, '🧱 生成素材索引 ' + (relOf(sheet) || sheet) + '（' + cols + '×' + rows + '）');
+      let r = null;
+      try {
+        r = ipc ? await ipc.invoke('doc-tileset-preview', sheet, {
+          tileSize: tileSize, cols: cols, rows: rows,
+          label: c.label || '', attribution: c.attribution || ''
+        }) : null;
+      } catch (e) { r = { ok: false, error: (e && e.message) || String(e) }; }
+
+      if (!r || !r.ok) {
+        const tt = '[失败] ' + ((r && r.error) || '生成失败');
+        if (currentBubble) addActivity(currentBubble, '⚠ ' + tt);
+        pushAssistant();
+        msgs.push({ role: 'user', content: '工具结果(tileset-preview)：' + tt });
+        return;
+      }
+
+      if (currentBubble) {
+        addActivity(currentBubble, '✅ 索引已生成：' + r.tiles + ' 个图块');
+        try {
+          const row = document.createElement('div');
+          row.className = 'ag-run-row';
+          const b = document.createElement('button');
+          b.className = 'ag-run-btn';
+          b.textContent = '🔍 打开素材预览';
+          b.addEventListener('click', function () { try { ipc.invoke('agent-open-path', r.html); } catch (e) {} });
+          row.appendChild(b);
+          currentBubble.appendChild(row);
+          scrollChat();
+        } catch (e) {}
+      }
+      turnTouched.push({ kind: 'create', abs: r.html });
+
+      pushAssistant();
+      msgs.push({
+        role: 'user',
+        content: '工具结果(tileset-preview)：\n'
+          + '索引：' + r.json + '\n预览：' + r.html + '\n'
+          + '共 ' + r.tiles + ' 个图块（' + r.cols + ' 列 × ' + r.rows + ' 行，每格 ' + tileSize + '）\n\n'
+          + '接下来：\n'
+          + '1. 让用户打开预览页，报几个他想要的地块编号（比如 11=草地、21=水、66=土路）\n'
+          + '2. 把名字写进 tiles.json 的 names 字段（{"11":"grass"}）\n'
+          + '3. 用编号拼地图，游戏里按下面的方式画：\n\n'
+          + (r.snippet || '')
+      });
+      return;
+    }
+
     if (a === 'create-pptx' || a === 'create_pptx') {
       const outPath = String(c.path || '').trim();
       const slides = Array.isArray(c.slides) ? c.slides : [];
