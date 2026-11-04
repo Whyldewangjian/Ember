@@ -10,6 +10,8 @@ const updateModule = require('./js/update-check');
 const githubAuthModule = require('./js/github-auth');
 const colorPalette = require('./js/color-palette');
 const fileSnapshot = require('./js/file-snapshot');
+const pptxBuild = require('./js/pptx-build');
+const pptxgen = require('pptxgenjs');
 const pageCheckModule = require('./js/page-check');
 const agentShellModule = require('./js/agent-shell');
 
@@ -1052,6 +1054,27 @@ ipcMain.handle('agent-analyze-palette', async (event, p) => {
     };
   } catch (e) { return { ok: false, error: (e && e.message) || String(e) }; }
 });
+// ★ 生成 pptx：版式全在 js/pptx-build.js 里，这里只做路径校验 + 调用
+ipcMain.handle('doc-create-pptx', async (event, target, spec) => {
+  try {
+    const np = agentNorm(target);
+    if (!agentInside(np)) return { ok: false, error: "路径不在工作文件夹内" };
+    const dir = path.dirname(np);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    const build = pptxBuild.makeBuilder(pptxgen);
+    const r = await build(spec || {}, np);
+    if (!r.ok) return { ok: false, error: r.error || "生成失败" };
+    return {
+      ok: true,
+      path: np,
+      slides: r.slides,
+      notes: r.notes,
+      warn: r.warn,
+      size: fs.existsSync(np) ? fs.statSync(np).size : 0
+    };
+  } catch (e) { return { ok: false, error: (e && e.message) || String(e) }; }
+});
+
 ipcMain.handle('agent-delete', async (event, p) => {
   try {
     const np = agentNorm(p);

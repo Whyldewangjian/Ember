@@ -1796,6 +1796,33 @@
         required: ['cmd']
       }
     } },
+    // ★ 生成 PPT（版式由代码控制，模型只填内容 —— 这样不会破版）
+    { type: 'function', function: {
+      name: 'create-pptx',
+      description: '生成一份 .pptx 演示文稿。版式由程序控制（不用你算坐标），你只填内容。'
+        + '可用版式：cover / bullets / two-col / image-text / table / big-number / end。'
+        + '文字放不下时会自动降字号、必要时自动续页，所以不要为了放得下而删内容。'
+        + '生成后会返回警告列表（哪些页做了降字号或续页）。',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: '输出 .pptx 绝对路径' },
+          theme: { type: 'string', enum: ['light', 'dark'], description: 'light=浅色商务，dark=深色科技' },
+          footer: { type: 'string', description: '页脚文字（一般写文档标题）' },
+          slides: {
+            type: 'array',
+            description: '页面数组。每页按 layout 填不同字段：'
+              + 'cover{title,subtitle,subtitle2}｜bullets{title,subtitle,bullets[],takeaway}｜'
+              + 'two-col{title,subtitle,left{title,items[]},right{title,items[]},takeaway}｜'
+              + 'image-text{title,subtitle,bullets[],image,imageHint,takeaway}｜'
+              + 'table{title,subtitle,table[][],note,takeaway}｜'
+              + 'big-number{title,subtitle,numbers[{value,label,desc}],takeaway}｜end{title,subtitle}',
+            items: { type: 'object', additionalProperties: true }
+          }
+        },
+        required: ['path', 'slides']
+      }
+    } },
     // ★ 校验美术件用色有没有按 PRD 色板来
     { type: 'function', function: {
       name: 'check-asset',
@@ -2949,6 +2976,64 @@
       msgs.push({ role: 'user', content: '工具结果(grep)：\n' + cap(txt, 20000) });
       return;
     }
+    if (a === 'create-pptx' || a === 'create_pptx') {
+      const outPath = String(c.path || '').trim();
+      const slides = Array.isArray(c.slides) ? c.slides : [];
+      if (!outPath || !slides.length) {
+        pushAssistant();
+        msgs.push({ role: 'user', content: '工具结果(create-pptx)：path 和 slides 都不能为空。' });
+        return;
+      }
+      if (currentBubble) addActivity(currentBubble, '📊 生成 PPT（' + slides.length + ' 页，' + (c.theme || 'light') + '）');
+      let r = null;
+      try {
+        r = ipc ? await ipc.invoke('doc-create-pptx', outPath, {
+          theme: c.theme === 'dark' ? 'dark' : 'light',
+          footer: c.footer || '',
+          slides: slides
+        }) : null;
+      } catch (e) { r = { ok: false, error: (e && e.message) || String(e) }; }
+
+      if (!r || !r.ok) {
+        const t = '[失败] ' + ((r && r.error) || '生成失败');
+        if (currentBubble) addActivity(currentBubble, '⚠ ' + t);
+        pushAssistant();
+        msgs.push({ role: 'user', content: '工具结果(create-pptx)：' + t });
+        return;
+      }
+
+      if (currentBubble) {
+        addActivity(currentBubble, '✅ PPT 已生成：' + relOf(outPath) + '（' + r.slides + ' 页，'
+          + Math.round((r.size || 0) / 1024) + ' KB）');
+        // 打开按钮
+        try {
+          const row = document.createElement('div');
+          row.className = 'ag-run-row';
+          const b = document.createElement('button');
+          b.className = 'ag-run-btn';
+          b.textContent = '📂 打开 PPT';
+          b.addEventListener('click', function () { try { ipc.invoke('agent-open-path', outPath); } catch (e) {} });
+          row.appendChild(b);
+          currentBubble.appendChild(row);
+          scrollChat();
+        } catch (e) {}
+      }
+      turnTouched.push({ kind: 'create', abs: outPath });
+
+      const warns = Array.isArray(r.warn) ? r.warn : [];
+      const warnTxt = warns.length
+        ? ('\n\n处理记录（自动降字号/续页/占位）：\n' + warns.slice(0, 10).map(function (w) { return '  · ' + JSON.stringify(w); }).join('\n'))
+        : '';
+      pushAssistant();
+      msgs.push({
+        role: 'user',
+        content: '工具结果(create-pptx)：生成成功，' + r.slides + ' 页，保存在 ' + outPath + warnTxt
+          + '\n\n（如果内容多到自动续页了，说明单页信息过载，可以考虑拆成两页或删掉次要细节。'
+          + '需要配图的页面，可以用 image 字段指定 assets/ 里的图片路径。）'
+      });
+      return;
+    }
+
     if (a === 'check-asset' || a === 'check_asset') {
       const fp = String(c.path || '').trim();
       if (!fp) {
