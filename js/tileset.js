@@ -34,7 +34,8 @@ function buildIndex(sheetPath, opt) {
           i: i++, c: c, r: r,
           hex: col ? col.hex : '',
           kind: col ? col.kind : '',
-          alpha: col && typeof col.tr === 'number' ? Math.round(col.tr * 100) / 100 : 1
+          alpha: col && typeof col.tr === 'number' ? Math.round(col.tr * 100) / 100 : 1,
+          edge: col && typeof col.edge === 'number' ? col.edge : 0
         });
       }
     }
@@ -130,7 +131,9 @@ function render() {
     ctx.drawImage(img, t.c * IDX.tileSize, t.r * IDX.tileSize, IDX.tileSize, IDX.tileSize, 0, 0, s, s);
     d.appendChild(cv);
     if (t.hex) {
-      d.title = '#' + t.i + '  ' + (t.kind || '') + '  ' + t.hex + (t.alpha < 0.65 ? '  透明 ' + Math.round((1 - t.alpha) * 100) + '%（可叠放）' : '');
+      d.title = '#' + t.i + '  ' + (t.kind || '') + '  ' + (t.hex || '')
+        + (t.alpha < 0.65 ? '  透明 ' + Math.round((1 - t.alpha) * 100) + '%（可叠放）' : '')
+        + (t.edge > 0.5 ? '  ⚠ 边缘有深色线（铺地会看到接缝）' : '');
       const dot = document.createElement('span');
       dot.style.cssText = 'position:absolute;right:1px;top:0;width:7px;height:7px;border:1px solid #000;background:' + t.hex;
       d.appendChild(dot);

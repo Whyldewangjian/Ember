@@ -1106,6 +1106,20 @@ ipcMain.handle('doc-tileset-preview', async (event, sheetPath, opt) => {
               }
             }
             const tr = total ? (total - n) / total : 0;   // 透明像素比例
+            // 检查四条边有没有"深色接缝线"（有些素材包每格之间压了一条黑线，铺开会看到缝隙）
+            let edgeDark = 0, edgeN = 0;
+            for (let y = 0; y < tile; y++) {
+              for (let x = 0; x < tile; x++) {
+                const isEdge = (y === 0 || y === tile - 1 || x === 0 || x === tile - 1);
+                if (!isEdge) continue;
+                const i4 = ((r * tile + y) * sz.width + (cc * tile + x)) * 4;
+                if (i4 + 3 >= bmp.length) continue;
+                if (bmp[i4 + 3] < 30) continue;
+                edgeN++;
+                if (bmp[i4] < 60 && bmp[i4 + 1] < 60 && bmp[i4 + 2] < 60) edgeDark++;
+              }
+            }
+            const edge = edgeN ? edgeDark / edgeN : 0;
             if (!n) { colors.push({ hex: '', kind: 'empty', tr: 1 }); continue; }
             sr = Math.round(sr / n); sg = Math.round(sg / n); sb = Math.round(sb / n);
             const hex = '#' + [sr, sg, sb].map(function (v) { return (v < 16 ? '0' : '') + v.toString(16); }).join('');
@@ -1117,7 +1131,7 @@ ipcMain.handle('doc-tileset-preview', async (event, sheetPath, opt) => {
             else if (Math.abs(sr - sg) < 20 && Math.abs(sg - sb) < 20) kind = 'gray';
             // 透明度决定它能不能"叠"在地面上（树/灌木/石头这类覆盖物）
             if (tr > 0.35) kind = 'overlay';
-            colors.push({ hex: hex, kind: kind, tr: tr });
+            colors.push({ hex: hex, kind: kind, tr: tr, edge: Math.round(edge * 100) / 100 });
           }
         }
       }
