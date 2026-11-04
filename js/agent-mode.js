@@ -3046,7 +3046,8 @@
         content: '工具结果(tileset-preview)：\n'
           + '索引：' + r.json + '\n预览：' + r.html + '\n'
           + '共 ' + r.tiles + ' 个图块（' + r.cols + ' 列 × ' + r.rows + ' 行，每格 ' + tileSize + '）\n'
-          + (r.byKind ? ('按颜色粗分（可直接参考，仍建议和用户确认）：\n'
+          + (r.byKind ? ('分类说明：overlay = 带透明通道，可叠在地面上（树/灌木/石头）；其余为不透明，铺地面用。\n'
+            + '按颜色粗分（可直接参考，仍建议和用户确认）：\n'
             + Object.keys(r.byKind).map(function (k) { return '  ' + k + '：' + r.byKind[k].join(','); }).join('\n') + '\n') : '')
           + '\n'
           + '接下来：\n'

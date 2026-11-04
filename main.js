@@ -1094,17 +1094,19 @@ ipcMain.handle('doc-tileset-preview', async (event, sheetPath, opt) => {
         const rows = Number((opt && opt.rows) || Math.floor(sz.height / tile));
         for (let r = 0; r < rows; r++) {
           for (let cc = 0; cc < cols; cc++) {
-            let sr = 0, sg = 0, sb = 0, n = 0;
+            let sr = 0, sg = 0, sb = 0, n = 0, total = 0;
             for (let y = 0; y < tile; y++) {
               for (let x = 0; x < tile; x++) {
                 const px = (r * tile + y) * sz.width + (cc * tile + x);
                 const i4 = px * 4;
                 if (i4 + 3 >= bmp.length) continue;
+                total++;
                 if (bmp[i4 + 3] < 30) continue;
                 sr += bmp[i4]; sg += bmp[i4 + 1]; sb += bmp[i4 + 2]; n++;
               }
             }
-            if (!n) { colors.push({ hex: '', kind: 'empty' }); continue; }
+            const tr = total ? (total - n) / total : 0;   // 透明像素比例
+            if (!n) { colors.push({ hex: '', kind: 'empty', tr: 1 }); continue; }
             sr = Math.round(sr / n); sg = Math.round(sg / n); sb = Math.round(sb / n);
             const hex = '#' + [sr, sg, sb].map(function (v) { return (v < 16 ? '0' : '') + v.toString(16); }).join('');
             let kind = 'other';
@@ -1113,7 +1115,9 @@ ipcMain.handle('doc-tileset-preview', async (event, sheetPath, opt) => {
             else if (sr > 140 && sg < 100 && sb < 100) kind = 'red';
             else if (sr > 110 && sg > 70 && sb < 100 && sr > sb + 40) kind = 'brown';
             else if (Math.abs(sr - sg) < 20 && Math.abs(sg - sb) < 20) kind = 'gray';
-            colors.push({ hex: hex, kind: kind });
+            // 透明度决定它能不能"叠"在地面上（树/灌木/石头这类覆盖物）
+            if (tr > 0.35) kind = 'overlay';
+            colors.push({ hex: hex, kind: kind, tr: tr });
           }
         }
       }

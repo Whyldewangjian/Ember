@@ -30,7 +30,12 @@ function buildIndex(sheetPath, opt) {
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
         const col = colors[i] || null;
-        tiles.push({ i: i++, c: c, r: r, hex: col ? col.hex : '', kind: col ? col.kind : '' });
+        tiles.push({
+          i: i++, c: c, r: r,
+          hex: col ? col.hex : '',
+          kind: col ? col.kind : '',
+          alpha: col && typeof col.tr === 'number' ? Math.round(col.tr * 100) / 100 : 1
+        });
       }
     }
   }
@@ -125,7 +130,7 @@ function render() {
     ctx.drawImage(img, t.c * IDX.tileSize, t.r * IDX.tileSize, IDX.tileSize, IDX.tileSize, 0, 0, s, s);
     d.appendChild(cv);
     if (t.hex) {
-      d.title = '#' + t.i + '  ' + (t.kind || '') + '  ' + t.hex;
+      d.title = '#' + t.i + '  ' + (t.kind || '') + '  ' + t.hex + (t.alpha < 0.65 ? '  透明 ' + Math.round((1 - t.alpha) * 100) + '%（可叠放）' : '');
       const dot = document.createElement('span');
       dot.style.cssText = 'position:absolute;right:1px;top:0;width:7px;height:7px;border:1px solid #000;background:' + t.hex;
       d.appendChild(dot);
