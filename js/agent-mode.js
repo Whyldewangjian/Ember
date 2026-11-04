@@ -2310,15 +2310,35 @@
     } catch (e) { return null; }
   }
   // 好处是"知识"放在文件里可以随时改，不用塞进预设、不用改代码，也不占每轮上下文太多。
+  // 内置技能（安装包自带，主进程释放到 userData\builtin-skills）
+  let builtinSkills = null;   // { dir, indexPath, indexText, files }
+  async function refreshBuiltinSkills() {
+    if (!ipc) return;
+    try {
+      const r = await ipc.invoke('agent-builtin-skills');
+      if (r && r.ok) builtinSkills = r;
+    } catch (e) {}
+  }
+
   function loadSkillIndex() {
     try {
       const fsMod = require('fs');
+      // ① 优先用工作文件夹里的（用户可以自己改）
       for (let i = 0; i < roots.length; i++) {
         const p = String(roots[i].path).replace(/[\\/]+$/, '') + '\\skills\\INDEX.md';
         if (fsMod.existsSync(p)) {
           const t = fsMod.readFileSync(p, 'utf8');
-          return { path: p, text: t.slice(0, 2500) };
+          return { path: p, text: t.slice(0, 2500), builtin: false };
         }
+      }
+      // ② 退回内置技能（安装包自带，新用户开箱就有流程）
+      if (builtinSkills && builtinSkills.indexText) {
+        return {
+          path: builtinSkills.indexPath,
+          text: String(builtinSkills.indexText).slice(0, 2500),
+          builtin: true,
+          dir: builtinSkills.dir
+        };
       }
     } catch (e) {}
     return null;
@@ -3854,5 +3874,6 @@
   renderTree();
   updateChatEmpty();
   refreshAssets();     // 首屏就把资产索引加载好，@ 列表才有内容
+  refreshBuiltinSkills();   // ★ 内置技能（安装包自带），首屏就备好
   try { renderSessionSelect(); } catch (e) {}
 })();

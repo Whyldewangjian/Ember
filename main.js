@@ -944,6 +944,44 @@ ipcMain.handle('doc-create-xlsx', async (event, p, sheets) => {
 
 
 
+// ★ 内置技能：把安装包里的 skills/ 释放到用户数据目录，供 Agent 读取
+//   为什么要释放：asar 里的文件虽然 fs 能读，但路径很长、也不方便用户自己看；
+//   释放到 %APPDATA%\Ember\builtin-skills 后，Agent 直接用绝对路径 read 就行。
+ipcMain.handle('agent-builtin-skills', async () => {
+  try {
+    const srcDir = path.join(__dirname, 'skills');
+    const dstDir = path.join(app.getPath('userData'), 'builtin-skills');
+    // 每次启动都覆盖更新（文件很小，几十 KB），保证和版本一致
+    try {
+      if (fs.existsSync(srcDir)) {
+        const sync = function (from, to) {
+          if (!fs.existsSync(to)) fs.mkdirSync(to, { recursive: true });
+          fs.readdirSync(from, { withFileTypes: true }).forEach(function (d) {
+            const a = path.join(from, d.name);
+            const b = path.join(to, d.name);
+            if (d.isDirectory()) sync(a, b);
+            else fs.copyFileSync(a, b);
+          });
+        };
+        sync(srcDir, dstDir);
+      }
+    } catch (e) {}
+    const indexPath = path.join(dstDir, 'INDEX.md');
+    const indexText = fs.existsSync(indexPath) ? fs.readFileSync(indexPath, 'utf8') : '';
+    const files = [];
+    try {
+      (function walk(dir, rel) {
+        fs.readdirSync(dir, { withFileTypes: true }).forEach(function (d) {
+          const p = path.join(dir, d.name);
+          const r = rel ? rel + '/' + d.name : d.name;
+          if (d.isDirectory()) walk(p, r);
+          else files.push({ rel: r, path: p, size: fs.statSync(p).size });
+        });
+      })(dstDir, '');
+    } catch (e) {}
+    return { ok: true, dir: dstDir, indexPath: indexPath, indexText: indexText, files: files };
+  } catch (e) { return { ok: false, error: (e && e.message) || String(e) }; }
+});
 // ★ 从参考图提取色板：让模型不用"感觉配色"，直接拿到具体色值
 ipcMain.handle('agent-analyze-palette', async (event, p) => {
   try {

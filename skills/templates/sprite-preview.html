@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>精灵验收台</title>
+<!--
+  ============================================================
+  通用「精灵动画验收台」模板
+  ------------------------------------------------------------
+  用法：把本文件复制到 assets/<类型>/<名字>/preview.html，
+        同目录放 sprite.js（或把下面的 src 改成你的文件名）。
+
+  对 sprite.js 的约定（满足任意一种即可被识别）：
+    window.Sprite = { ... }        推荐
+    window.<任意名字> = { ... }     会扫描所有全局对象找 makeCanvas
+    字段：
+      id          string
+      frameSize   [w, h]
+      palette     { 键: '#rrggbb', ... }
+      dirs        ['down','left','right','up']
+      frames      { idle: 2, walk: 4 }
+      animMs      120（帧间隔）
+      draw(ctx, { dir, frame, x, y })
+      makeCanvas({ dir, frame }) → HTMLCanvasElement
+
+  设计原则：页面不含任何具体角色的数据，换 sprite.js 就换角色。
+  ============================================================
+-->
+<style>
+  :root { --bg:#0e151d; --panel:#17222d; --line:#2b3a45; --ink:#e9f0e9; --sub:#8fa3ad; --hot:#e0b45a; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:13px/1.5 system-ui,"Microsoft YaHei",sans-serif; }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 18px 18px 40px; }
+  h1 { font-size:17px; margin:0 0 2px; }
+  .sub { color:var(--sub); font-size:11.5px; margin-bottom:14px; }
+  .main { display:flex; gap:16px; align-items:flex-start; flex-wrap:wrap; }
+  .stage { background:var(--panel); border:1px solid var(--line); padding:10px; }
+  .stage canvas { image-rendering: pixelated; display:block; background:#0a1218; }
+  .stage.gridon canvas {
+    background-image: linear-gradient(rgba(255,255,255,.05) 1px, transparent 1px),
+                      linear-gradient(90deg, rgba(255,255,255,.05) 1px, transparent 1px);
+    background-size: 8px 8px;
+  }
+  .side { flex:1; min-width:300px; }
+  .group { background:var(--panel); border:1px solid var(--line); padding:10px 12px; margin-bottom:10px; }
+  .glabel { font-size:11px; color:var(--sub); letter-spacing:.4px; margin-bottom:8px; }
+  .btns { display:flex; gap:6px; flex-wrap:wrap; }
+  button {
+    background:#1f2c38; color:var(--ink); border:1px solid var(--line); border-radius:6px;
+    padding:6px 11px; font:inherit; font-size:12.5px; cursor:pointer;
+  }
+  button:hover { background:#263542; }
+  button.on { background:var(--hot); border-color:var(--hot); color:#1a1206; font-weight:600; }
+  .framerow { display:flex; gap:6px; margin-top:8px; flex-wrap:wrap; }
+  .framerow .f { border:1px solid var(--line); background:#0a1218; padding:2px; cursor:pointer; }
+  .framerow .f.on { border-color:var(--hot); }
+  .framerow .f canvas { image-rendering: pixelated; display:block; }
+  .pal { display:flex; gap:5px; margin-top:8px; flex-wrap:wrap; }
+  .sw { width:20px; height:20px; border:1px solid #000; }
+  .meta { font-size:11.5px; color:var(--sub); margin-top:8px; }
+  .meta b { color:var(--ink); font-weight:600; }
+  .err { color:#ffb3a8; font-size:12px; padding:10px; border:1px solid #b4534a; background:rgba(180,83,74,.12); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1 id="title">精灵验收台</h1>
+  <div class="sub" id="subtitle">点按钮切方向和动作，看到的就是游戏里跑的同一份动画</div>
+
+  <div id="errBox" style="display:none" class="err"></div>
+
+  <div class="main" id="main" style="display:none">
+    <div class="stage gridon" id="stage">
+      <canvas id="big" width="256" height="384"></canvas>
+    </div>
+
+    <div class="side">
+      <div class="group">
+        <div class="glabel">方向</div>
+        <div class="btns" id="dirBtns"></div>
+      </div>
+
+      <div class="group">
+        <div class="glabel">动作 / 播放</div>
+        <div class="btns" id="actBtns"></div>
+        <div class="btns" style="margin-top:6px">
+          <button id="btnPlay" class="on">⏸ 暂停</button>
+          <button id="btnPrev">← 上一帧</button>
+          <button id="btnNext">下一帧 →</button>
+          <button id="btnGrid" class="on">网格</button>
+        </div>
+      </div>
+
+      <div class="group">
+        <div class="glabel">速度（帧间隔）</div>
+        <div class="btns" id="spdBtns">
+          <button data-ms="200">慢 200ms</button>
+          <button data-ms="120" class="on">标准 120ms</button>
+          <button data-ms="80">快 80ms</button>
+        </div>
+      </div>
+
+      <div class="group">
+        <div class="glabel" id="frameLabel">走路帧（点一下跳到该帧）</div>
+        <div class="framerow" id="frames"></div>
+      </div>
+
+      <div class="group">
+        <div class="glabel">色板</div>
+        <div class="pal" id="pal"></div>
+        <div class="meta" id="meta"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ★ 换角色只改这一行（同目录的 sprite.js） -->
+<script src="sprite.js"></script>
+<script>
+(function () {
+  // 找到精灵对象：优先 window.Sprite，否则扫描带 makeCanvas 的全局对象
+  function findSprite() {
+    if (window.Sprite && typeof window.Sprite.makeCanvas === 'function') return window.Sprite;
+    const skip = { window: 1, self: 1, document: 1, top: 1, parent: 1 };
+    for (const k in window) {
+      if (skip[k]) continue;
+      try {
+        const v = window[k];
+        if (v && typeof v === 'object' && typeof v.makeCanvas === 'function' && v.frameSize) return v;
+      } catch (e) {}
+    }
+    return null;
+  }
+
+  const S = findSprite();
+  if (!S) {
+    const box = document.getElementById('errBox');
+    box.style.display = '';
+    box.textContent = '没找到精灵数据：同目录的 sprite.js 需要暴露 window.Sprite（或任意带 makeCanvas 的全局对象）。'
+      + ' 也可以直接把本模板的 <script src="sprite.js"> 改成你的文件名。';
+    return;
+  }
+
+  const DIRS = Array.isArray(S.dirs) && S.dirs.length ? S.dirs : ['down'];
+  const FRAMES = {
+    idle: (S.frames && S.frames.idle) || 2,
+    walk: (S.frames && S.frames.walk) || 4
+  };
+  const DIR_LABEL = { down: '下 ↓', left: '左 ←', right: '右 →', up: '上 ↑' };
+  const scale = 8;   // 放大倍数（32×48 → 256×384）
+
+  const big = document.getElementById('big');
+  big.width = S.frameSize[0] * scale;
+  big.height = S.frameSize[1] * scale;
+  const ctx = big.getContext('2d');
+  ctx.imageSmoothingEnabled = false;
+
+  let dir = DIRS[0], act = 'walk', playing = true, frame = 0, ms = S.animMs || 120, timer = null;
+
+  document.getElementById('title').textContent = (S.id || '精灵') + ' · 验收台';
+  document.getElementById('main').style.display = '';
+  document.getElementById('meta').innerHTML =
+    '帧尺寸 <b>' + S.frameSize.join('×') + '</b> · 方向 <b>' + DIRS.length + '</b> 个 · '
+    + '待机 <b>' + FRAMES.idle + '</b> 帧 · 走路 <b>' + FRAMES.walk + '</b> 帧 · 默认帧间隔 <b>' + ms + 'ms</b>';
+
+  function frameCount() { return act === 'walk' ? FRAMES.walk : FRAMES.idle; }
+
+  function paint() {
+    const src = S.makeCanvas({ dir: dir, frame: frame % Math.max(1, frameCount()) });
+    ctx.clearRect(0, 0, big.width, big.height);
+    // 地面参考线：判断脚底是否齐平
+    ctx.fillStyle = 'rgba(255,255,255,.10)';
+    ctx.fillRect(0, big.height - 24, big.width, 1);
+    ctx.drawImage(src, 0, 0, big.width, big.height);
+    const nodes = document.querySelectorAll('.framerow .f');
+    nodes.forEach(function (el, i) { el.classList.toggle('on', i === (frame % Math.max(1, frameCount()))); });
+  }
+
+  function tick() {
+    if (!playing) return;
+    frame = (frame + 1) % Math.max(1, frameCount());
+    paint();
+  }
+  function restart() {
+    if (timer) clearInterval(timer);
+    timer = playing ? setInterval(tick, ms) : null;
+  }
+
+  // 方向按钮
+  const dirBox = document.getElementById('dirBtns');
+  DIRS.forEach(function (d, i) {
+    const b = document.createElement('button');
+    b.dataset.dir = d;
+    b.textContent = DIR_LABEL[d] || d;
+    if (i === 0) b.classList.add('on');
+    dirBox.appendChild(b);
+  });
+  dirBox.addEventListener('click', function (e) {
+    const b = e.target.closest('button'); if (!b) return;
+    dir = b.dataset.dir;
+    this.querySelectorAll('button').forEach(function (x) { x.classList.toggle('on', x === b); });
+    paint();
+  });
+
+  // 动作按钮
+  const actBox = document.getElementById('actBtns');
+  [['walk', '走路'], ['idle', '待机']].forEach(function ([k, label], i) {
+    const n = FRAMES[k] || 0;
+    if (!n) return;
+    const b = document.createElement('button');
+    b.dataset.act = k;
+    b.textContent = label + '（' + n + ' 帧）';
+    if (i === 0) b.classList.add('on');
+    actBox.appendChild(b);
+  });
+  actBox.addEventListener('click', function (e) {
+    const b = e.target.closest('button'); if (!b) return;
+    act = b.dataset.act; frame = 0;
+    this.querySelectorAll('button').forEach(function (x) { x.classList.toggle('on', x === b); });
+    paint();
+  });
+
+  const btnPlay = document.getElementById('btnPlay');
+  btnPlay.addEventListener('click', function () {
+    playing = !playing;
+    btnPlay.textContent = playing ? '⏸ 暂停' : '▶ 播放';
+    btnPlay.classList.toggle('on', playing);
+    restart();
+  });
+  document.getElementById('btnPrev').addEventListener('click', function () {
+    playing = false; btnPlay.textContent = '▶ 播放'; btnPlay.classList.remove('on'); restart();
+    frame = (frame - 1 + frameCount()) % frameCount(); paint();
+  });
+  document.getElementById('btnNext').addEventListener('click', function () {
+    playing = false; btnPlay.textContent = '▶ 播放'; btnPlay.classList.remove('on'); restart();
+    frame = (frame + 1) % frameCount(); paint();
+  });
+  document.getElementById('btnGrid').addEventListener('click', function () {
+    document.getElementById('stage').classList.toggle('gridon');
+    this.classList.toggle('on');
+  });
+
+  document.getElementById('spdBtns').addEventListener('click', function (e) {
+    const b = e.target.closest('button'); if (!b) return;
+    ms = parseInt(b.dataset.ms, 10);
+    this.querySelectorAll('button').forEach(function (x) { x.classList.toggle('on', x === b); });
+    restart();
+  });
+
+  // 帧条（用第一个方向）
+  (function buildFrames() {
+    const box = document.getElementById('frames');
+    const n = FRAMES.walk || 1;
+    for (let i = 0; i < n; i++) {
+      const d = document.createElement('div');
+      d.className = 'f';
+      const cv = document.createElement('canvas');
+      cv.width = S.frameSize[0] * 2; cv.height = S.frameSize[1] * 2;
+      const c = cv.getContext('2d');
+      c.imageSmoothingEnabled = false;
+      c.drawImage(S.makeCanvas({ dir: DIRS[0], frame: i }), 0, 0, cv.width, cv.height);
+      d.appendChild(cv);
+      d.title = '帧 ' + (i + 1);
+      d.addEventListener('click', function () {
+        act = 'walk'; frame = i % n; playing = false;
+        btnPlay.textContent = '▶ 播放'; btnPlay.classList.remove('on'); restart();
+        actBox.querySelectorAll('button').forEach(function (x) { x.classList.toggle('on', x.dataset.act === 'walk'); });
+        paint();
+      });
+      box.appendChild(d);
+    }
+  })();
+
+  // 色板
+  const pal = document.getElementById('pal');
+  Object.keys(S.palette || {}).forEach(function (k) {
+    const sw = document.createElement('div');
+    sw.className = 'sw';
+    sw.style.background = S.palette[k];
+    sw.title = k + ' ' + S.palette[k];
+    pal.appendChild(sw);
+  });
+
+  paint();
+  restart();
+})();
+</script>
+</body>
+</html>
