@@ -1684,6 +1684,12 @@
           typeof EmberGame !== 'undefined' && EmberGame.normalize) {
         payload = EmberGame.normalize(payload);
       }
+      // ★ 写盘前先快照（改坏能回退）
+      if (p.kind === 'write' || p.kind === 'delete' || p.kind === 'rename') {
+        await snapBefore(p.kind, p.abs, p.to);
+      } else if (p.kind === 'create') {
+        await snapBefore('create', p.abs);
+      }
       if (p.kind === 'write') r = await ipc.invoke('agent-write-file', p.abs, payload);
       else if (p.kind === 'create') r = await ipc.invoke('agent-create-file', p.abs, payload);
       else if (p.kind === 'create-xlsx') r = await ipc.invoke('doc-create-xlsx', p.abs, p.sheets);
@@ -2205,6 +2211,42 @@
   // 为什么必须注入：PRD.md 只是个文件，系统提示里原本只有文件名。
   // 结果就是"分开做美术件"时它拿不到色板 —— 每件各配各的色，拼起来像素材包。
   // 这里每轮把「画幅那一行」和「第 7 章视觉规范」抽出来塞进提示词，色板才真正起作用。
+  // ---------- 改动快照（改坏能回退）----------
+  // 每次真正写盘之前，让主进程把原文件复制一份到 <工作文件夹>\.ember-backup\
+  // 本轮所有快照 id 收在 turnSnapshots 里，气泡上给一个「回退本轮改动」按钮。
+  let turnSnapshots = [];   // [{ id, entries }]
+  async function snapBefore(kind, abs, to) {
+    if (!ipc || !abs) return;
+    try {
+      const r = await ipc.invoke('agent-snapshot', [{ kind: kind, abs: abs, to: to || '' }]);
+      if (r && r.ok && r.id) turnSnapshots.push({ id: r.id, entries: r.entries || [] });
+    } catch (e) {}
+  }
+  async function restoreTurn() {
+    if (!turnSnapshots.length) { setStatus('这一轮没有可回退的改动'); return; }
+    const ok = (typeof showConfirm === 'function')
+      ? await showConfirm('回退本轮全部改动？\n\n会把被改/被删的文件恢复成改动前的样子，'
+        + '本轮新建的文件会被删掉。\n共 ' + turnSnapshots.length + ' 次快照。', { danger: true, okLabel: '确认回退' })
+      : false;
+    if (!ok) return;
+    let restored = 0, removed = 0, failed = 0;
+    for (let i = turnSnapshots.length - 1; i >= 0; i--) {
+      try {
+        const r = await ipc.invoke('agent-restore-snapshot', turnSnapshots[i].id);
+        if (r && r.ok) { restored += (r.restored || []).length; removed += (r.removed || []).length; }
+        else failed++;
+      } catch (e) { failed++; }
+    }
+    turnSnapshots = [];
+    if (currentBubble) {
+      addActivity(currentBubble, failed
+        ? ('↩ 回退完成：恢复 ' + restored + ' 个、删除 ' + removed + ' 个、' + failed + ' 次失败')
+        : ('↩ 已回退本轮改动：恢复 ' + restored + ' 个、删除 ' + removed + ' 个新建文件'));
+    }
+    setStatus('已回退');
+    try { await refreshList(); } catch (e) {}
+    try { renderProposals(); } catch (e) {}
+  }
   // ---------- 美术件配色校验 ----------
   // 读 palette.json（PRD 色板）+ 目标文件里的 #rrggbb，算重合率。
   // 目的：把"应该遵守色板"变成"程序能判定"，避免每件各配各的色。
@@ -2646,6 +2688,8 @@
           typeof EmberGame !== 'undefined' && EmberGame.normalize) {
         payload = EmberGame.normalize(payload);
       }
+      // ★ 写盘前先快照
+      await snapBefore(p.kind, p.abs, p.to);
       if (p.kind === 'write') r = await ipc.invoke('agent-write-file', p.abs, payload);
       else if (p.kind === 'create') r = await ipc.invoke('agent-create-file', p.abs, payload);
       else if (p.kind === 'create-xlsx') r = await ipc.invoke('doc-create-xlsx', p.abs, p.sheets);
@@ -3347,7 +3391,8 @@
       // ★ 尊重用户的「自动 / 询问」设置：自动模式下直接删除，不再额外确认
       if (autoFor(c.path)) {
         let r = null;
-        try { r = await ipc.invoke('agent-delete', c.path); } catch (e) { r = { ok: false, error: (e && e.message) || String(e) }; }
+        await snapBefore('delete', c.path);
+      try { r = await ipc.invoke('agent-delete', c.path); } catch (e) { r = { ok: false, error: (e && e.message) || String(e) }; }
         if (r && r.ok) {
           turnTouched.push({ kind: 'delete', abs: c.path, rel: relOf(c.path), content: '', old: '' });
           if (currentBubble) addActivity(currentBubble, '🗑 已自动删除 ' + relOf(c.path));
@@ -3368,7 +3413,8 @@
       // ★ 同上：自动模式下直接重命名
       if (autoFor(c.from)) {
         let r = null;
-        try { r = await ipc.invoke('agent-rename', c.from, c.to); } catch (e) { r = { ok: false, error: (e && e.message) || String(e) }; }
+        await snapBefore('rename', c.from, c.to);
+      try { r = await ipc.invoke('agent-rename', c.from, c.to); } catch (e) { r = { ok: false, error: (e && e.message) || String(e) }; }
         if (r && r.ok) {
           turnTouched.push({ kind: 'rename', abs: c.to, rel: relOf(c.from), relTo: relOf(c.to), content: '', old: '' });
           if (currentBubble) addActivity(currentBubble, '📁 已自动重命名 ' + relOf(c.from) + ' → ' + relOf(c.to));
@@ -3519,6 +3565,7 @@
 
     running = true;
     turnTouched = [];
+    turnSnapshots = [];          // ★ 本轮改动快照（可回退）
     scriptOkThisTurn = false;   // ★ 本轮有没有成功跑过脚本（脚本改的文件不进提案队列）
     // ★ 清掉上一轮遗留的中止控制器。
     //   否则只要上一轮被中止过（点过停止 / 关窗中断），
@@ -3747,6 +3794,21 @@
       }
     } catch (e) {}
 
+    // ★ 本轮有快照 → 给一个回退按钮
+    if (turnSnapshots.length && currentBubble) {
+      try {
+        const row = document.createElement('div');
+        row.className = 'ag-run-row';
+        const b = document.createElement('button');
+        b.className = 'ag-run-btn';
+        b.textContent = '↩ 回退本轮改动';
+        b.title = '把本轮改过/删过的文件恢复原样，本轮新建的文件会被删掉';
+        b.addEventListener('click', function () { b.disabled = true; restoreTurn(); });
+        row.appendChild(b);
+        currentBubble.appendChild(row);
+        scrollChat();
+      } catch (e) {}
+    }
     // ★ 收尾自检：本轮写过 HTML 就自动跑一次页面检查，结果直接摆在气泡里。
     //   这样"它说完成"和"页面真的能跑"就有了证据，不用你自己打开才知道。
     if (!errText && !(abortCtl && abortCtl.signal.aborted) && ipc) {

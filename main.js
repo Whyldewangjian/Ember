@@ -9,6 +9,7 @@ const browserModule = require('./js/browser-window');
 const updateModule = require('./js/update-check');
 const githubAuthModule = require('./js/github-auth');
 const colorPalette = require('./js/color-palette');
+const fileSnapshot = require('./js/file-snapshot');
 const pageCheckModule = require('./js/page-check');
 const agentShellModule = require('./js/agent-shell');
 
@@ -943,6 +944,32 @@ ipcMain.handle('doc-create-xlsx', async (event, p, sheets) => {
 
 
 
+
+// ★ 改动快照：复用 js/file-snapshot.js（有独立测试覆盖：改/删/新建都能完整回退）
+ipcMain.handle('agent-snapshot', async (event, items) => {
+  try {
+    const root = agentRoots.length ? agentNorm(agentRoots[0]) : "";
+    if (!root) return { ok: false, error: "没有工作文件夹" };
+    const list = (Array.isArray(items) ? items : []).map(function (it) {
+      return { kind: it && it.kind, abs: it && it.abs ? agentNorm(it.abs) : "", to: it && it.to ? agentNorm(it.to) : "" };
+    }).filter(function (it) { return it.abs && agentInside(it.abs); });
+    return fileSnapshot.snapshot(root, list);
+  } catch (e) { return { ok: false, error: (e && e.message) || String(e) }; }
+});
+
+ipcMain.handle('agent-restore-snapshot', async (event, id) => {
+  try {
+    const root = agentRoots.length ? agentNorm(agentRoots[0]) : "";
+    return fileSnapshot.restore(root, id);
+  } catch (e) { return { ok: false, error: (e && e.message) || String(e) }; }
+});
+
+ipcMain.handle('agent-list-snapshots', async () => {
+  try {
+    const root = agentRoots.length ? agentNorm(agentRoots[0]) : "";
+    return { ok: true, items: fileSnapshot.listSnapshots(root) };
+  } catch (e) { return { ok: false, error: (e && e.message) || String(e) }; }
+});
 
 // ★ 内置技能：把安装包里的 skills/ 释放到用户数据目录，供 Agent 读取
 //   为什么要释放：asar 里的文件虽然 fs 能读，但路径很长、也不方便用户自己看；
