@@ -2260,6 +2260,44 @@
   // 为什么必须注入：PRD.md 只是个文件，系统提示里原本只有文件名。
   // 结果就是"分开做美术件"时它拿不到色板 —— 每件各配各的色，拼起来像素材包。
   // 这里每轮把「画幅那一行」和「第 7 章视觉规范」抽出来塞进提示词，色板才真正起作用。
+  // ---------- 收尾自动配色校验 ----------
+  // 不指望模型每次记得调 check-asset：本轮写过美术件（sprite.js 之类）就自动比对一次。
+  // 偏了就把结论写进下一轮的系统提示，逼它先改色。
+  let pendingPaletteWarning = "";
+  function autoCheckAssets() {
+    try {
+      const fsMod = require("fs");
+      const cands = [];
+      (turnTouched || []).forEach(function (it) {
+        if (!it || !it.abs) return;
+        if (!/\.js$/i.test(it.abs)) return;
+        if (!/sprite|char|asset|enemy|npc/i.test(it.abs)) return;
+        if (fsMod.existsSync(it.abs)) cands.push(it.abs);
+      });
+      const out = [];
+      cands.slice(0, 4).forEach(function (p) {
+        const txt = fsMod.readFileSync(p, "utf8");
+        if (txt.indexOf("makeCanvas") < 0 && txt.indexOf("palette") < 0) return;
+        const r = checkAssetColors(p);
+        if (r && r.ok) out.push({ path: p, pct: Math.round(r.ratio * 100), outside: r.outside });
+      });
+      if (!out.length) return;
+      const bad = out.filter(function (x) { return x.pct < 70; });
+      out.forEach(function (x) {
+        if (currentBubble) addActivity(currentBubble, (x.pct >= 70 ? "✅ " : "⚠ ") + "配色核对 "
+          + (relOf(x.path) || x.path) + "：与色板重合 " + x.pct + "%");
+      });
+      if (bad.length) {
+        pendingPaletteWarning = bad.map(function (x) {
+          return (relOf(x.path) || x.path) + " 只有 " + x.pct + "% 的颜色来自 PRD 色板"
+            + (x.outside && x.outside.length ? "（偏离：" + x.outside.slice(0, 5).join(" ") + "）" : "");
+        }).join("；");
+      } else {
+        pendingPaletteWarning = "";
+      }
+    } catch (e) {}
+  }
+
   // ---------- 改动快照（改坏能回退）----------
   // 每次真正写盘之前，让主进程把原文件复制一份到 <工作文件夹>\.ember-backup\
   // 本轮所有快照 id 收在 turnSnapshots 里，气泡上给一个「回退本轮改动」按钮。
@@ -2649,6 +2687,7 @@
       '当前文件清单（共 ' + files.length + ' 个' + (files.length > 400 ? '，仅列前 400 个' : '') + '）：',
       fileTxt || '(空)',
       assetTxt,
+      pendingPaletteWarning ? ("\n【上一轮配色问题】" + pendingPaletteWarning + "\n（先按色板改掉这些颜色，再继续做别的）") : "",
       prd ? ('\n【PRD 摘要】（来自 ' + prd.path + '；做美术件必须按这里的色板取色）\n'
         + (prd.sizeLine ? ('画幅：' + prd.sizeLine + '\n') : '')
         + (prd.palette ? ('色板（机器可读，优先用它）：\n' + prd.palette + '\n') : '')
@@ -3961,6 +4000,9 @@
         }
       }
     } catch (e) {}
+
+    // ★ 本轮写过美术件 → 自动核对配色（不靠模型自觉）
+    autoCheckAssets();
 
     // ★ 本轮有快照 → 给一个回退按钮
     if (turnSnapshots.length && currentBubble) {
