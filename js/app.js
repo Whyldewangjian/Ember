@@ -3315,11 +3315,16 @@ function showDownloadingUI(p) {
     updateCancel.disabled = false;
     updateCancel.textContent = '取消下载';
   }
-  const pct = p.total ? Math.round(p.received / p.total * 100) : 0;
+  const hasTotal = p.total > 0;
+  const pct = hasTotal ? Math.round(p.received / p.total * 100) : 0;
   const spd = p.speed ? fmtSize(Math.round(p.speed)) + '/s' : '计算中…';
-  const eta = p.eta ? ('预计还需 ' + (p.eta >= 60 ? Math.floor(p.eta / 60) + ' 分 ' + (p.eta % 60) + ' 秒' : p.eta + ' 秒')) : '';
+  const eta = (hasTotal && p.eta) ? ('预计还需 ' + (p.eta >= 60 ? Math.floor(p.eta / 60) + ' 分 ' + (p.eta % 60) + ' 秒' : p.eta + ' 秒')) : '';
+  // ★ 服务器没给 Content-Length 时，别显示 "0% X /" —— 那看着像卡住了
+  const progressLine = hasTotal
+    ? (pct + '%   ' + fmtSize(p.received) + ' / ' + fmtSize(p.total))
+    : ('已下载 ' + fmtSize(p.received) + '（服务器没给总大小）');
   setUpdateText('正在下载新版本…\n\n'
-    + pct + '%   ' + fmtSize(p.received) + ' / ' + fmtSize(p.total) + '\n'
+    + progressLine + '\n'
     + '速度 ' + spd + (eta ? '    ' + eta : '')
     + (p.threads > 1 ? '\n\n（' + p.threads + ' 线程并行下载）' : '')
     + '\n\n完成后会自动重启，也可以点「取消下载」中止。');

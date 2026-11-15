@@ -17,6 +17,7 @@ const http = require('http');
 const https = require('https');
 
 const UA = 'Ember-Updater';
+const inflight = new Set();   // 在途的请求（取消时要逐个 abort，否则 promise 永远不 resolve）
 const PART_SIZE = 12 * 1024 * 1024;   // 每段 12MB
 const MAX_PARTS = 8;
 
@@ -60,8 +61,13 @@ function snapshot() {
 }
 
 function cancel() {
-  if (state.active) state.cancelled = true;
-  return { ok: true, active: state.active };
+  state.cancelled = true;
+  // ★ 关键：不只是打个标记，必须把在途的请求全部 abort 掉。
+  //   以前只置标记、靠轮询 destroy，遇到"半死连接"时 promise 永远不 settle，
+  //   界面就卡在「正在取消…」。
+  let n = 0;
+  inflight.forEach(function (h) { try { h.abort('cancelled by user'); n++; } catch (e) {} });
+  return { ok: true, active: state.active, aborted: n };
 }
 
 function tickSpeed() {
@@ -117,18 +123,35 @@ function fetchPart(url, start, end, partFile, onBytes) {
   return new Promise(function (resolve, reject) {
     const lib = url.indexOf('http:') === 0 ? http : https;
     let settled = false;
-    const done = function (fn, arg) { if (!settled) { settled = true; fn(arg); } };
+    let wd = null;
+    const cleanup = function () {
+      if (wd) { clearInterval(wd); wd = null; }
+      inflight.delete(handle);
+    };
+    const done = function (fn, arg) { if (!settled) { settled = true; cleanup(); fn(arg); } };
+
+    let lastByteAt = Date.now();
+    let resRef = null;
+    const handle = {
+      abort: function (why) {
+        try { if (resRef) resRef.destroy(); } catch (e) {}
+        try { req.destroy(); } catch (e) {}
+        done(reject, new Error(why || 'cancelled'));
+      }
+    };
+    inflight.add(handle);
 
     const req = lib.get(url, {
       headers: { 'User-Agent': UA, 'Range': 'bytes=' + start + '-' + end },
       timeout: 60000
     }, function (res) {
+      resRef = res;
       if (res.statusCode !== 206 && res.statusCode !== 200) {
         res.resume();
         return done(reject, new Error('分段失败 HTTP ' + res.statusCode));
       }
       const out = fs.createWriteStream(partFile);
-      res.on('data', function (c) { if (onBytes) onBytes(c.length); });
+      res.on('data', function (c) { lastByteAt = Date.now(); if (onBytes) onBytes(c.length); });
       res.pipe(out);
       out.on('finish', function () { out.close(function () { done(resolve, partFile); }); });
       out.on('error', function (e) { done(reject, e); });
@@ -137,6 +160,13 @@ function fetchPart(url, start, end, partFile, onBytes) {
 
     req.on('timeout', function () { req.destroy(new Error('分段超时')); });
     req.on('error', function (e) { done(reject, e); });
+    // ★ 看门狗：连接"半死"（TCP 还在但没数据）时 60 秒都没有新字节 → 主动判死，
+    //   否则界面会永远停在某个百分比，用户只能强杀进程。
+    wd = setInterval(function () {
+      if (Date.now() - lastByteAt > 60000) {
+        handle.abort('stalled（60 秒没有收到数据）');
+      }
+    }, 5000);
 
     // 取消：轮询 state.cancelled（简单可靠，不依赖事件）
     const t = setInterval(function () {
@@ -174,6 +204,15 @@ async function download(url, destPath, opts) {
   opts = opts || {};
   reset();
   state.active = true;
+  // ★ 清掉上一次残留的分段/安装包，避免"看着下完了其实是旧文件"
+  try {
+    const dir = require('path').dirname(destPath);
+    if (require('fs').existsSync(dir)) {
+      require('fs').readdirSync(dir).forEach(function (f) {
+        if (/\.part\d+$/.test(f)) { try { require('fs').unlinkSync(require('path').join(dir, f)); } catch (e) {} }
+      });
+    }
+  } catch (e) {}
   state.startedAt = Date.now();
   const emit = function (extra) {
     if (typeof opts.onProgress === 'function') {
