@@ -92,7 +92,7 @@ function start(cwd) {
   outBuf = '';
   try {
     bufCursor = 0;
-    child = spawn('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', '-'], {
+    child = spawn('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', '-'], {
       cwd: dir,
       windowsHide: true,
       stdio: ['pipe', 'pipe', 'pipe']

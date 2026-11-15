@@ -3122,19 +3122,48 @@
     }
 
     if (a === 'device-info' || a === 'device_info') {
-      const act = String(c.action || '').trim();
-      if (currentBubble) addActivity(currentBubble, '🔌 设备查询：' + (act || '(未指定)'));
+      let act = String(c.action || '').trim().toLowerCase();
+      // ★ 容错：模型有时会把工具名本身（device-info / usb / serial…）当 action 传进来
+      if (!act || act === 'device-info' || act === 'device_info' || act === 'all' || act === 'info' || act === 'list') act = 'all';
+      else if (act === 'serial' || act === 'serial-read' || act === 'read-serial' || act === 'bootlog') act = 'read';
+      else if (act === 'serial-ports' || act === 'com' || act === 'comports') act = 'ports';
+      if (currentBubble) addActivity(currentBubble, '🔌 设备查询：' + act);
       let r = null;
       try {
-        if (act === 'usb') r = await ipc.invoke('device-usb');
+        if (act === 'read' && !String(c.port || '').trim()) {
+          // 没给端口号：先列出端口，让模型知道该读哪个
+          const pr = await ipc.invoke('device-serial-list');
+          const names = ((pr && pr.ports) || []).map(function (p) { return p.port; });
+          r = { ok: false, error: 'action=read 需要 port 参数。当前可用串口：' + (names.join('、') || '（没有）') };
+        } else if (act === 'usb') r = await ipc.invoke('device-usb');
         else if (act === 'ports') r = await ipc.invoke('device-serial-list');
         else if (act === 'read') r = await ipc.invoke('device-serial-read', c.port, c.seconds, c.baud, !!c.reset);
-        else r = { ok: false, error: 'action 只能是 usb / ports / read' };
+        else {
+          // all：一次把 USB 和串口都拿到
+          const u = await ipc.invoke('device-usb');
+          const p2 = await ipc.invoke('device-serial-list');
+          const gs = (u && u.groups) || [];
+          const pn = ((p2 && p2.ports) || []).map(function (x) { return x.port + '(' + x.device + ')'; });
+          r = {
+            ok: true,
+            text: 'USB 设备（' + gs.length + ' 个）：\n'
+              + gs.map(function (g) {
+                  return '- ' + g.vidpid + (g.serial ? '  序列号 ' + g.serial : '')
+                    + (g.ifaces && g.ifaces.length ? '  接口 MI_' + g.ifaces.join(',MI_') : '')
+                    + (g.desc ? '  ' + g.desc : '');
+                }).join('\n')
+              + '\n\n串口：' + (pn.join('、') || '（没有）')
+          };
+        }
       } catch (e) { r = { ok: false, error: (e && e.message) || String(e) }; }
 
       let body = '';
-      if (!r || !r.ok) {
-        body = '[失败] ' + ((r && r.error) || '未知错误');
+      if (r && r.ok && r.text) {
+        body = r.text;
+      } else if (!r || !r.ok) {
+        body = '[失败] ' + ((r && r.error) || '未知错误')
+          + '\n正确写法：{"action":"usb"} / {"action":"ports"} / {"action":"read","port":"COM3","seconds":8}'
+          + '\n（不要自己写 .ps1 脚本；这个工具已经能直接查。）';
       } else if (act === 'usb') {
         const gs = r.groups || [];
         body = '共 ' + (r.total || 0) + ' 个实例，' + gs.length + ' 个设备：\n'
@@ -3918,7 +3947,8 @@
         if (reply.toolCalls && reply.toolCalls.length) {
           const tcList = reply.toolCalls;
           const sig = JSON.stringify(tcList.map(function (t) { return t.name + ':' + JSON.stringify(t.args); }));
-          if (sig === lastSig) {
+          const isEmptyPoll = tcList.every(function (t) { return (t.name === "shell") && !String((t.args && t.args.cmd) || "").trim(); });
+        if (sig === lastSig && !isEmptyPoll) {
             // ★ 重复同一操作：先提醒一次让它往前走（读同一个文件两遍是最常见的卡点）
             if (!dupNudged) {
               dupNudged = true;
