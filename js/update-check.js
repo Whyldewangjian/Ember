@@ -434,23 +434,56 @@ function registerUpdateIPC() {
       };
 
       // ★ 用独立下载模块（多线程 + 可取消 + 速度统计），进度广播给所有窗口
-      broadcastProgress('downloading', { received: 0, total: asset.size || 0, threads: 0, speed: 0, eta: 0 });
-      try {
-        await dl.download(asset.browser_download_url, newExe, {
-          total: asset.size || 0,
-          onProgress: function (p) {
-            broadcastProgress(p.stage === 'merging' ? 'merging' : 'downloading', {
-              received: p.received, total: p.total,
-              speed: p.speed, eta: p.eta, threads: p.threads
-            });
-          }
+      //   ★ 多地址兜底：GitHub 的 release 资源域名在国内经常"半死"（TCP 通、数据不来），
+      //     实测 ghproxy 镜像反而支持 Range 且能给出总大小。所以：
+      //        第 1 次：官方地址
+      //        第 2 次：官方地址再试一次（瞬时抖动）
+      //        第 3 次：ghproxy 镜像
+      const official = asset.browser_download_url;
+      const attempts = [
+        { url: official, label: '官方' },
+        { url: official, label: '官方重试' },
+        { url: 'https://ghproxy.net/' + official, label: 'ghproxy 镜像' }
+      ];
+
+      let dlOk = false;
+      let lastErr = null;
+      for (let ai = 0; ai < attempts.length; ai++) {
+        const at = attempts[ai];
+        broadcastProgress('downloading', {
+          received: 0, total: asset.size || 0, threads: 0, speed: 0, eta: 0,
+          via: at.label, attempt: ai + 1, attempts: attempts.length
         });
-      } catch (dlErr) {
-        if (dlErr && dlErr.message === 'cancelled') {
-          broadcastProgress('cancelled', {});
-          return { ok: false, cancelled: true, error: '已取消下载' };
+        try {
+          await dl.download(at.url, newExe, {
+            total: asset.size || 0,
+            onProgress: function (p) {
+              broadcastProgress(p.stage === 'merging' ? 'merging' : 'downloading', {
+                received: p.received, total: p.total,
+                speed: p.speed, eta: p.eta, threads: p.threads,
+                via: at.label, attempt: ai + 1, attempts: attempts.length
+              });
+            }
+          });
+          dlOk = true;
+          break;
+        } catch (dlErr) {
+          if (dlErr && /cancelled/.test(String(dlErr.message))) {
+            broadcastProgress('cancelled', {});
+            return { ok: false, cancelled: true, error: '已取消下载' };
+          }
+          lastErr = dlErr;
+          // 清掉这次留下的分段，避免下一轮读到半个文件
+          try {
+            fs.readdirSync(tmpDir).forEach(function (f) {
+              if (/.partd+$/.test(f)) { try { fs.unlinkSync(path.join(tmpDir, f)); } catch (e) {} }
+            });
+          } catch (e) {}
         }
-        throw dlErr;
+      }
+      if (!dlOk) {
+        broadcastProgress('error', { message: (lastErr && lastErr.message) || '下载失败' });
+        return { ok: false, error: '下载失败（已试过官方与镜像）：' + ((lastErr && lastErr.message) || '') };
       }
 
       broadcastProgress('installing', {});

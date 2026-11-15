@@ -3326,6 +3326,7 @@ function showDownloadingUI(p) {
   setUpdateText('正在下载新版本…\n\n'
     + progressLine + '\n'
     + '速度 ' + spd + (eta ? '    ' + eta : '')
+    + (p.via ? ('\n' + p.via + (p.attempt > 1 ? '（第 ' + p.attempt + '/' + p.attempts + ' 次尝试）' : '')) : '')
     + (p.threads > 1 ? '\n\n（' + p.threads + ' 线程并行下载）' : '')
     + '\n\n完成后会自动重启，也可以点「取消下载」中止。');
 }

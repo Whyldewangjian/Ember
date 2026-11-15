@@ -118,8 +118,33 @@ function probe(url, redirectsLeft) {
   });
 }
 
+// ★ 断点续传：连接中途被掐断时，不再从头下，而是从 .part 文件已有的字节处继续。
+//   国内到 GitHub 资源域名经常十几秒就断一次，靠续传才能把 82MB 下完。
+function fetchPartResumable(url, start, end, partFile, onBytes, maxAttempts) {
+  const tries = Math.max(1, Number(maxAttempts) || 5);
+  return (async function () {
+    for (let a = 0; a < tries; a++) {
+      let have = 0;
+      try { have = fs.existsSync(partFile) ? fs.statSync(partFile).size : 0; } catch (e) { have = 0; }
+      const from = start + have;
+      if (from > end) return partFile;              // 已经下完了
+      try {
+        await fetchPart(url, from, end, partFile, onBytes, have > 0);
+        const size = fs.existsSync(partFile) ? fs.statSync(partFile).size : 0;
+        if (start + size >= end + 1) return partFile; // 完整性校验
+        throw new Error('分段不完整（' + size + '/' + (end - start + 1) + '）');
+      } catch (e) {
+        if (state.cancelled) throw new Error('cancelled');
+        if (a === tries - 1) throw e;
+        await new Promise(function (r) { setTimeout(r, 600 * (a + 1)); });
+      }
+    }
+    return partFile;
+  })();
+}
+
 // 下载 [start, end] 到 partFile；onBytes 每次收到数据回调
-function fetchPart(url, start, end, partFile, onBytes) {
+function fetchPart(url, start, end, partFile, onBytes, append) {
   return new Promise(function (resolve, reject) {
     const lib = url.indexOf('http:') === 0 ? http : https;
     let settled = false;
@@ -150,7 +175,7 @@ function fetchPart(url, start, end, partFile, onBytes) {
         res.resume();
         return done(reject, new Error('分段失败 HTTP ' + res.statusCode));
       }
-      const out = fs.createWriteStream(partFile);
+      const out = fs.createWriteStream(partFile, append ? { flags: 'a' } : undefined);
       res.on('data', function (c) { lastByteAt = Date.now(); if (onBytes) onBytes(c.length); });
       res.pipe(out);
       out.on('finish', function () { out.close(function () { done(resolve, partFile); }); });
@@ -231,8 +256,11 @@ async function download(url, destPath, opts) {
   const total = p.total || opts.total || 0;
   state.total = total;
 
+  // ★ 镜像站对并发连接敏感（实测 ghproxy 开 7 线会被服务端 abort），
+  //   所以允许调用方限制线程数；默认仍是 8。
+  const cap = Math.max(1, Math.min(MAX_PARTS, Number(opts.maxThreads) || MAX_PARTS));
   let n = total ? Math.ceil(total / PART_SIZE) : 1;
-  n = Math.max(1, Math.min(MAX_PARTS, n));
+  n = Math.max(1, Math.min(cap, n));
   if (!p.supportsRange) n = 1;
   state.threads = n;
   emit({ received: 0, total: total, speed: 0, eta: 0, threads: n });
@@ -249,7 +277,7 @@ async function download(url, destPath, opts) {
   if (n === 1) {
     const one = destPath + '.part0';
     try {
-      await fetchPart(p.finalUrl, 0, total ? total - 1 : '', one, bump);
+      await fetchPartResumable(p.finalUrl, 0, total ? total - 1 : Number.MAX_SAFE_INTEGER, one, bump, 5);
     } catch (e) {
       try { fs.unlinkSync(one); } catch (x) {}
       reset();
@@ -270,7 +298,7 @@ async function download(url, destPath, opts) {
     const end = Math.min(total - 1, start + chunk - 1);
     const pf = destPath + '.part' + i;
     parts.push(pf);
-    jobs.push(fetchPart(p.finalUrl, start, end, pf, bump));
+    jobs.push(fetchPartResumable(p.finalUrl, start, end, pf, bump, 5));
   }
 
   try {
