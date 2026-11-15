@@ -135,4 +135,145 @@ function cloneRepo(url, destDir) {
   });
 }
 
-module.exports = { fetchText, cloneRepo };
+// ---------- 正文提取（去导航/广告，省 token）----------
+function extractMainText(html) {
+  let s = String(html || '');
+  // 1) 去掉整块噪声
+  s = s.replace(/<!--[\s\S]*?-->/g, '');
+  s = s.replace(/<(script|style|noscript|svg|canvas|iframe|form)\b[\s\S]*?<\/\1>/gi, ' ');
+  s = s.replace(/<(nav|header|footer|aside)\b[\s\S]*?<\/\1>/gi, ' ');
+  // 2) 块级标签变换行，列表项加前缀
+  s = s.replace(/<li\b[^>]*>/gi, '\n• ');
+  s = s.replace(/<(br|hr)\s*\/?>/gi, '\n');
+  s = s.replace(/<\/(p|div|section|article|h[1-6]|tr|ul|ol|table|blockquote)>/gi, '\n');
+  s = s.replace(/<h[1-6]\b[^>]*>/gi, '\n## ');
+  s = s.replace(/<\/(td|th)>/gi, ' | ');
+  // 3) 去掉剩下的标签
+  s = s.replace(/<[^>]+>/g, ' ');
+  // 4) 实体解码
+  const ents = { '&nbsp;': ' ', '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&#39;': "'", '&apos;': "'", '&mdash;': '-', '&ndash;': '-', '&hellip;': '…', '&middot;': '·', '&times;': '×' };
+  Object.keys(ents).forEach(function (k) { s = s.split(k).join(ents[k]); });
+  s = s.replace(/&#x([0-9a-f]+);/gi, function (_, h) { try { return String.fromCodePoint(parseInt(h, 16)); } catch (e) { return ' '; } });
+  s = s.replace(/&#(\d+);/g, function (_, d) { try { return String.fromCodePoint(parseInt(d, 10)); } catch (e) { return ' '; } });
+  // 5) 收尾：压缩空白与空行
+  s = s.replace(/[ \t\u00a0]+/g, ' ');
+  s = s.replace(/\n{3,}/g, '\n\n');
+  s = s.split('\n').map(function (l) { return l.trim(); }).filter(function (l, i, arr) {
+    // 去掉导航式短行（大量重复的 1~3 字菜单项）
+    if (l.length <= 3 && arr.length > 40) return false;
+    return l.length > 0;
+  }).join('\n');
+  return s.trim();
+}
+
+// ---------- 搜索（有 Tavily Key 用 Tavily，没有就用 Bing RSS，免费）----------
+function searchTavily(key, query, maxResults, depth) {
+  return new Promise(function (resolve) {
+    const body = JSON.stringify({
+      api_key: key,
+      query: String(query || ''),
+      max_results: Math.max(1, Math.min(10, Number(maxResults) || 5)),
+      search_depth: depth === 'advanced' ? 'advanced' : 'basic'
+    });
+    const req = https.request({
+      hostname: 'api.tavily.com', path: '/search', method: 'POST', timeout: 25000,
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) }
+    }, function (res) {
+      const ch = [];
+      res.on('data', function (d) { ch.push(d); });
+      res.on('end', function () {
+        try {
+          const j = JSON.parse(Buffer.concat(ch).toString('utf8'));
+          resolve({
+            ok: true, engine: 'tavily',
+            answer: j.answer || '',
+            results: (j.results || []).map(function (r) {
+              return { title: r.title || '', url: r.url || '', snippet: String(r.content || '').slice(0, 500) };
+            })
+          });
+        } catch (e) { resolve({ ok: false, error: 'Tavily 返回解析失败' }); }
+      });
+    });
+    req.on('error', function (e) { resolve({ ok: false, error: (e && e.message) || String(e) }); });
+    req.on('timeout', function () { req.destroy(); resolve({ ok: false, error: 'Tavily 超时' }); });
+    req.write(body); req.end();
+  });
+}
+
+async function searchBingRss(query, maxResults) {
+  const url = 'https://www.bing.com/search?format=rss&q=' + encodeURIComponent(String(query || ''));
+  const r = await getOnce(url, 3);
+  if (!r.ok) return { ok: false, error: r.error || ('HTTP ' + r.status) };
+  const xml = String(r.text || '');
+  const items = xml.match(/<item>[\s\S]*?<\/item>/g) || [];
+  const strip = function (t) {
+    return String(t || '').replace(/<!\[CDATA\[|\]\]>/g, '')
+      .replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+  };
+  const results = items.slice(0, Math.max(1, Math.min(10, Number(maxResults) || 5))).map(function (it) {
+    return {
+      title: strip((it.match(/<title>([\s\S]*?)<\/title>/) || [])[1]),
+      url: strip((it.match(/<link>([\s\S]*?)<\/link>/) || [])[1]),
+      snippet: strip((it.match(/<description>([\s\S]*?)<\/description>/) || [])[1]).slice(0, 400)
+    };
+  }).filter(function (x) { return x.url; });
+  return { ok: results.length > 0, engine: 'bing-rss', results: results,
+    error: results.length ? '' : '没有解析到搜索结果（可能是被拦截或关键词太窄）' };
+}
+
+async function searchWeb(query, maxResults, depth, tavilyKey) {
+  const key = String(tavilyKey || '').trim();
+  if (key) {
+    const t = await searchTavily(key, query, maxResults, depth);
+    if (t.ok) return t;
+  }
+  return await searchBingRss(query, maxResults);
+}
+
+// ---------- 下载二进制文件（图片/PDF/压缩包）----------
+function downloadFile(url, destPath, maxBytes) {
+  return new Promise(function (resolve) {
+    let u;
+    try { u = new URL(String(url || '').trim()); } catch (e) { return resolve({ ok: false, error: 'URL 不合法' }); }
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return resolve({ ok: false, error: '只允许 http/https' });
+    const limit = Math.max(1024, Math.min(50 * 1024 * 1024, Number(maxBytes) || 20 * 1024 * 1024));
+    const mod = u.protocol === 'https:' ? https : http;
+    const req = mod.request({
+      hostname: u.hostname, port: u.port || (u.protocol === 'https:' ? 443 : 80),
+      path: u.pathname + u.search, method: 'GET',
+      headers: { 'User-Agent': UA, 'Accept': '*/*' }, timeout: 30000
+    }, function (res) {
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        res.resume();
+        return resolve(downloadFile(new URL(res.headers.location, url).toString(), destPath, limit));
+      }
+      if (res.statusCode !== 200) {
+        res.resume();
+        return resolve({ ok: false, error: 'HTTP ' + res.statusCode });
+      }
+      const ct = String(res.headers['content-type'] || '');
+      const ch = [];
+      let total = 0, tooBig = false;
+      res.on('data', function (d) {
+        total += d.length;
+        if (total > limit) { tooBig = true; res.destroy(); return; }
+        ch.push(d);
+      });
+      res.on('end', function () {
+        if (tooBig) return resolve({ ok: false, error: '文件超过上限 ' + Math.round(limit / 1048576) + ' MB' });
+        const buf = Buffer.concat(ch);
+        try {
+          const dir = path.dirname(destPath);
+          if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+          fs.writeFileSync(destPath, buf);
+        } catch (e) { return resolve({ ok: false, error: '写入失败：' + ((e && e.message) || e) }); }
+        resolve({ ok: true, path: destPath, bytes: buf.length, contentType: ct });
+      });
+    });
+    req.on('error', function (e) { resolve({ ok: false, error: (e && e.message) || String(e) }); });
+    req.on('timeout', function () { req.destroy(); resolve({ ok: false, error: '下载超时（30 秒）' }); });
+    req.end();
+  });
+}
+
+module.exports = { fetchText, cloneRepo, extractMainText, searchWeb, downloadFile };

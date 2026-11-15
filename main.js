@@ -1179,6 +1179,27 @@ ipcMain.handle('net-clone-repo', async (event, url, dir) => {
   } catch (e) { return { ok: false, error: (e && e.message) || String(e) }; }
 });
 
+ipcMain.handle('net-web-search', async (event, query, maxResults, depth, tavilyKey) => {
+  try { return await netFetch.searchWeb(query, maxResults, depth, tavilyKey); }
+  catch (e) { return { ok: false, error: (e && e.message) || String(e) }; }
+});
+
+ipcMain.handle('net-download', async (event, url, dest, maxBytes) => {
+  try {
+    const nd = agentNorm(dest);
+    if (!agentInside(nd)) return { ok: false, error: "保存路径必须在工作文件夹内" };
+    return await netFetch.downloadFile(url, nd, maxBytes);
+  } catch (e) { return { ok: false, error: (e && e.message) || String(e) }; }
+});
+
+// ★ 网页正文提取（渲染层拿到 HTML 后调它，去掉导航/脚本/广告，省 token）
+ipcMain.handle('net-extract-text', async (event, html) => {
+  try {
+    const t = netFetch.extractMainText(html);
+    return { ok: true, text: t, length: t.length };
+  } catch (e) { return { ok: false, error: (e && e.message) || String(e) }; }
+});
+
 ipcMain.handle('agent-delete', async (event, p) => {
   try {
     const np = agentNorm(p);
