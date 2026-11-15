@@ -80,7 +80,35 @@ function getOnce(url, redirectsLeft) {
   });
 }
 
+// 国内网络对 raw.githubusercontent.com / jsdelivr 经常直接重置，
+// 实测这台机器只有 ghproxy 通，所以失败后自动换镜像重试一次。
+function isGithubRaw(u) {
+  const s = String(u || '');
+  if (/^https?:\/\/raw\.githubusercontent\.com\//i.test(s)) return true;
+  return /^https?:\/\/github\.com\/[^/]+\/[^/]+\/(raw|blob)\//i.test(s);
+}
+function viaGhproxy(u) {
+  return 'https://ghproxy.net/' + u;
+}
+
 async function fetchText(url) {
+  const u0 = String(url || '').trim();
+  let r = await getOnce(u0, 3);
+  if (!r.ok && (r.status === undefined || r.status === 0) && isGithubRaw(u0)) {
+    const alt = await getOnce(viaGhproxy(u0), 3);
+    if (alt.ok) {
+      alt.mirror = 'ghproxy';
+      return alt;
+    }
+    r.error = String(r.error || '') + '；镜像 ghproxy 也失败：' + String(alt.error || alt.status || '');
+  }
+  if (r.ok && r.text && r.text.length > 60000) {
+    r.text = r.text.slice(0, 60000) + '\n…（后面截掉了，共 ' + r.text.length + ' 字）';
+  }
+  return r;
+}
+
+async function _fetchTextOld(url) {
   const r = await getOnce(String(url || '').trim(), 3);
   if (r.ok && r.text && r.text.length > 60000) {
     r.text = r.text.slice(0, 60000) + '\n…（后面截掉了，共 ' + r.text.length + ' 字）';
