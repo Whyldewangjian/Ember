@@ -11,6 +11,7 @@ const githubAuthModule = require('./js/github-auth');
 const colorPalette = require('./js/color-palette');
 const fileSnapshot = require('./js/file-snapshot');
 const deviceInfo = require('./js/device-info');
+const netFetch = require('./js/net-fetch');
 const pptxBuild = require('./js/pptx-build');
 const tileset = require('./js/tileset');
 const pptxgen = require('pptxgenjs');
@@ -1162,6 +1163,20 @@ ipcMain.handle('device-serial-list', async () => {
 ipcMain.handle('device-serial-read', async (event, port, ms, baud, reset) => {
   try { return await deviceInfo.readSerial(port, ms, baud, reset); }
   catch (e) { return { ok: false, error: (e && e.message) || String(e) }; }
+});
+
+// ★ 联网取资料：抓网页 / 浅克隆仓库（模型以前完全没这个能力）
+ipcMain.handle('net-fetch-url', async (event, url) => {
+  try { return await netFetch.fetchText(url); }
+  catch (e) { return { ok: false, error: (e && e.message) || String(e) }; }
+});
+
+ipcMain.handle('net-clone-repo', async (event, url, dir) => {
+  try {
+    const nd = agentNorm(dir);
+    if (!agentInside(nd)) return { ok: false, error: "克隆目标必须在工作文件夹内" };
+    return await netFetch.cloneRepo(url, nd);
+  } catch (e) { return { ok: false, error: (e && e.message) || String(e) }; }
 });
 
 ipcMain.handle('agent-delete', async (event, p) => {
