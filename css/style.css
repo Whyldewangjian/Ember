@@ -3962,3 +3962,29 @@ textarea { font-size: calc(15px * var(--fs-scale, 1)); }
 }
 
 
+
+/* ===== Agent 工具栏：窄窗口时不要挤掉「会话」控件 ===== */
+/* 原来 toolbar 是 nowrap flex，元素一多就被挤出可视区，
+   表现就是"会话下拉和三个按钮看不见"。这里保证它们永远在，且不互相压字。 */
+#agentMode .canvas-toolbar { overflow: hidden; }
+#agentMode .canvas-toolbar > * { flex-shrink: 0; }
+#agentMode .canvas-toolbar select { min-width: 74px; }
+#agentMode .ag-session-sel { min-width: 104px; max-width: 150px; flex-shrink: 0; }
+#agentMode .ag-sess-btn { flex-shrink: 0; padding: 2px 6px; }
+
+/* 窄一点就把「模型 / 生图」这两个文字标签让位，保住下拉和会话控件 */
+@media (max-width: 1180px) {
+  #agentMode .ag-model-label,
+  #agentMode .canvas-toolbar .model-select-label:not(.ag-sess-label) { display: none; }
+  #agentMode .ag-sess-label { display: inline; }
+  #agentMode .ag-model-sel { max-width: 108px; }
+  #agentMode .ag-image-sel { max-width: 92px; }
+  #agentMode .canvas-toolbar { gap: 6px; padding: 0 10px; }
+}
+/* 更窄（吸附到侧边）时：只留会话 + 必备按钮 */
+@media (max-width: 860px) {
+  #agentMode .ag-model-sel,
+  #agentMode .ag-image-sel { display: none; }
+  #agentMode .ag-session-sel { min-width: 92px; max-width: 120px; }
+  #agentMode #agClearChatBtn { display: none; }
+}
