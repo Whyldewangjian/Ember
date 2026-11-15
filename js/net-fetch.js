@@ -23,7 +23,7 @@ const path = require('path');
 const MAX_BYTES = 200 * 1024;
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Ember/1.3.x';
 
-function getOnce(url, redirectsLeft) {
+function getOnce(url, redirectsLeft, timeoutMs) {
   return new Promise(function (resolve) {
     let u;
     try { u = new URL(url); } catch (e) { return resolve({ ok: false, error: 'URL 不合法：' + url }); }
@@ -38,7 +38,7 @@ function getOnce(url, redirectsLeft) {
       path: u.pathname + u.search,
       method: 'GET',
       headers: { 'User-Agent': UA, 'Accept': 'text/html,application/xhtml+xml,text/plain,*/*' },
-      timeout: 20000
+      timeout: Number(timeoutMs) || 20000
     }, function (res) {
       // 跳转
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location && (redirectsLeft || 0) > 0) {
@@ -74,7 +74,7 @@ function getOnce(url, redirectsLeft) {
         });
       });
     });
-    req.on('timeout', function () { req.destroy(); resolve({ ok: false, error: '超时（20 秒）' }); });
+    req.on('timeout', function () { req.destroy(); resolve({ ok: false, error: '超时（' + Math.round((Number(timeoutMs) || 20000) / 1000) + ' 秒）' }); });
     req.on('error', function (e) { resolve({ ok: false, error: (e && e.message) || String(e) }); });
     req.end();
   });
@@ -87,6 +87,48 @@ function isGithubRaw(u) {
   if (/^https?:\/\/raw\.githubusercontent\.com\//i.test(s)) return true;
   return /^https?:\/\/github\.com\/[^/]+\/[^/]+\/(raw|blob)\//i.test(s);
 }
+
+// 从 raw 链接里拆出 owner / repo / ref / path
+function parseGithubRaw(u) {
+  const s = String(u || '');
+  let m = s.match(/^https?:\/\/raw\.githubusercontent\.com\/([^/]+)\/([^/]+)\/([^/]+)\/(.+)$/i);
+  if (m) return { owner: m[1], repo: m[2], ref: m[3], path: m[4] };
+  m = s.match(/^https?:\/\/github\.com\/([^/]+)\/([^/]+)\/(?:raw|blob)\/([^/]+)\/(.+)$/i);
+  if (m) return { owner: m[1], repo: m[2], ref: m[3], path: m[4] };
+  return null;
+}
+
+// ★ 走 api.github.com 的 contents 接口拿文件（base64），
+//   这条路在没有 raw 访问权限的网络里通常可用（实测这台机器 api.github.com 正常）。
+async function fetchGithubViaApi(info) {
+  const apiUrl = 'https://api.github.com/repos/' + info.owner + '/' + info.repo
+    + '/contents/' + info.path + '?ref=' + encodeURIComponent(info.ref);
+  const r = await getOnce(apiUrl, 2);
+  if (!r.ok) return { ok: false, error: 'api.github.com 也失败：' + (r.error || ('HTTP ' + r.status)) };
+  let j;
+  try { j = JSON.parse(r.text); } catch (e) { return { ok: false, error: 'API 返回不是 JSON（可能是限流页面）' }; }
+  if (Array.isArray(j)) {
+    // 目录：把条目列成文本，模型也能用
+    const lines = j.map(function (x) {
+      return (x.type === 'dir' ? '[目录] ' : '[文件] ') + x.name + (x.size ? '  ' + x.size + ' 字节' : '');
+    }).join('\n');
+    return {
+      ok: true, status: 200, via: 'gh-api',
+      bytes: Buffer.byteLength(lines), contentType: 'text/plain',
+      text: '（这是目录，共 ' + j.length + ' 项）\n' + lines
+    };
+  }
+  if (j && j.content) {
+    const buf = Buffer.from(String(j.content).replace(/\s/g, ''), 'base64');
+    return {
+      ok: true, status: 200, via: 'gh-api',
+      bytes: buf.length, contentType: 'text/plain',
+      text: buf.toString('utf8')
+    };
+  }
+  return { ok: false, error: 'API 没有返回内容' };
+}
+
 function viaGhproxy(u) {
   return 'https://ghproxy.net/' + u;
 }
@@ -94,14 +136,24 @@ function viaGhproxy(u) {
 async function fetchText(url) {
   const u0 = String(url || '').trim();
   let r = await getOnce(u0, 3);
+
   if (!r.ok && (r.status === undefined || r.status === 0) && isGithubRaw(u0)) {
-    const alt = await getOnce(viaGhproxy(u0), 3);
-    if (alt.ok) {
-      alt.mirror = 'ghproxy';
-      return alt;
+    const info = parseGithubRaw(u0);
+    // ① 先试 ghproxy（快的话几秒，慢就放弃）
+    const alt = await getOnce(viaGhproxy(u0), 2, 8000);
+    if (alt.ok) { alt.mirror = 'ghproxy'; return alt; }
+
+    // ② 再试 GitHub 官方 API（这条路在国内通常更稳）
+    if (info) {
+      const api = await fetchGithubViaApi(info);
+      if (api.ok) return api;
+      r.error = String(r.error || '') + '；ghproxy：' + String(alt.error || '失败')
+        + '；' + api.error;
+    } else {
+      r.error = String(r.error || '') + '；ghproxy：' + String(alt.error || '失败');
     }
-    r.error = String(r.error || '') + '；镜像 ghproxy 也失败：' + String(alt.error || alt.status || '');
   }
+
   if (r.ok && r.text && r.text.length > 60000) {
     r.text = r.text.slice(0, 60000) + '\n…（后面截掉了，共 ' + r.text.length + ' 字）';
   }
