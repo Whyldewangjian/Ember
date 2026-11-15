@@ -10,6 +10,7 @@ const updateModule = require('./js/update-check');
 const githubAuthModule = require('./js/github-auth');
 const colorPalette = require('./js/color-palette');
 const fileSnapshot = require('./js/file-snapshot');
+const deviceInfo = require('./js/device-info');
 const pptxBuild = require('./js/pptx-build');
 const tileset = require('./js/tileset');
 const pptxgen = require('pptxgenjs');
@@ -1144,6 +1145,23 @@ ipcMain.handle('doc-tileset-preview', async (event, sheetPath, opt) => {
       byKind: r.index.byKind, snippet: tileset.DRAW_SNIPPET
     };
   } catch (e) { return { ok: false, error: (e && e.message) || String(e) }; }
+});
+
+// ★ 设备能力：USB 枚举 / 串口列表 / 串口读取（抓启动日志）
+//   单独做工具，而不是让模型现场拼 PowerShell：编码、截断、丢输出三个坑都在机制层解决。
+ipcMain.handle('device-usb', async () => {
+  try { return await deviceInfo.listUsb(); }
+  catch (e) { return { ok: false, error: (e && e.message) || String(e) }; }
+});
+
+ipcMain.handle('device-serial-list', async () => {
+  try { return await deviceInfo.listSerial(); }
+  catch (e) { return { ok: false, error: (e && e.message) || String(e) }; }
+});
+
+ipcMain.handle('device-serial-read', async (event, port, ms, baud, reset) => {
+  try { return await deviceInfo.readSerial(port, ms, baud, reset); }
+  catch (e) { return { ok: false, error: (e && e.message) || String(e) }; }
 });
 
 ipcMain.handle('agent-delete', async (event, p) => {

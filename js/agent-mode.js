@@ -1781,7 +1781,9 @@
     { type: 'function', function: {
       name: 'shell',
       description: '在常驻 PowerShell 里执行命令，返回这段等待时间内的输出。'
-        + '适合：npm install、npm run build、跑测试、起本地服务器、看长日志。'
+        + '适合：npm install、npm run build、跑测试、起本地服务器、看长日志、查系统信息。'
+        + '单次最多等 60 秒；输出不会丢（两次轮询之间的内容也能拿到），最多返回 60000 字。'
+        + '查 USB 设备/串口/抓串口日志请优先用 device-info 工具，不要自己拼 PowerShell。'
         + '命令在第一个工作文件夹里执行。明显的毁灭性命令会被拒绝。'
         + '想只看后面新产生的输出（比如服务器日志），把 cmd 留空、wait 设大一点再调一次。'
         + '注意：删文件不要用 shell（Get-ChildItem | Remove-Item 这种会被拒绝），'
@@ -1813,6 +1815,27 @@
           attribution: { type: 'string', description: '素材署名（CC-BY 必须写）' }
         },
         required: ['sheet', 'cols', 'rows']
+      }
+    } },
+    // ★ 设备能力：USB / 串口 / 抓启动日志（做嵌入式、开发板、串口设备时用）
+    { type: 'function', function: {
+      name: 'device-info',
+      description: '查询本机连接的硬件设备，不依赖 WMI（WMI 常被系统拒绝）。'
+        + 'action=usb 枚举 USB 设备（VID/PID/实例ID/描述/接口/序列号）；'
+        + 'action=ports 列出串口（COM 号）；'
+        + 'action=read 打开某个串口被动读 N 秒（抓启动日志/设备输出，默认 115200、不发数据）；'
+        + 'reset=true 时先做 DTR/RTS 复位再读（很多开发板只在复位后打印启动日志）。'
+        + '输出已经是 UTF-8，不会乱码、不会被截断。',
+      parameters: {
+        type: 'object',
+        properties: {
+          action: { type: 'string', enum: ['usb', 'ports', 'read'], description: '要做什么' },
+          port: { type: 'string', description: '串口名，比如 COM3（action=read 必填）' },
+          seconds: { type: 'number', description: '读多久，默认 6，最大 60' },
+          baud: { type: 'number', description: '波特率，默认 115200' },
+          reset: { type: 'boolean', description: '是否先复位（DTR/RTS），默认 false' }
+        },
+        required: ['action']
       }
     } },
     // ★ 生成 PPT（版式由代码控制，模型只填内容 —— 这样不会破版）
@@ -3098,6 +3121,48 @@
       return;
     }
 
+    if (a === 'device-info' || a === 'device_info') {
+      const act = String(c.action || '').trim();
+      if (currentBubble) addActivity(currentBubble, '🔌 设备查询：' + (act || '(未指定)'));
+      let r = null;
+      try {
+        if (act === 'usb') r = await ipc.invoke('device-usb');
+        else if (act === 'ports') r = await ipc.invoke('device-serial-list');
+        else if (act === 'read') r = await ipc.invoke('device-serial-read', c.port, c.seconds, c.baud, !!c.reset);
+        else r = { ok: false, error: 'action 只能是 usb / ports / read' };
+      } catch (e) { r = { ok: false, error: (e && e.message) || String(e) }; }
+
+      let body = '';
+      if (!r || !r.ok) {
+        body = '[失败] ' + ((r && r.error) || '未知错误');
+      } else if (act === 'usb') {
+        const gs = r.groups || [];
+        body = '共 ' + (r.total || 0) + ' 个实例，' + gs.length + ' 个设备：\n'
+          + gs.map(function (g) {
+            return '- ' + g.vidpid + (g.serial ? '  序列号 ' + g.serial : '')
+              + (g.ifaces && g.ifaces.length ? '  接口 MI_' + g.ifaces.join(',MI_') : '')
+              + (g.desc ? '  ' + g.desc : '');
+          }).join('\n');
+      } else if (act === 'ports') {
+        body = (r.ports || []).length
+          ? '串口：' + r.ports.map(function (p) { return p.port + '(' + p.device + ')'; }).join('、')
+          : '没有检测到串口';
+      } else {
+        const h = r.hints || {};
+        const kv = Object.keys(h).filter(function (k) { return h[k]; })
+          .map(function (k) { return k + '=' + h[k]; }).join('  ');
+        body = '读了 ' + r.bytes + ' 字节（' + (r.meta || '') + '）\n'
+          + (kv ? '识别到：' + kv + '\n' : '（没有识别到标准启动日志字段，原始内容在下面）\n')
+          + '\n原始输出：\n' + String(r.text || '').slice(-4000);
+      }
+
+      if (currentBubble) addActivity(currentBubble, (r && r.ok ? '✅ ' : '⚠ ') + '设备查询完成');
+      pushAssistant();
+      msgs.push({ role: 'user', content: '工具结果(device-info ' + act + ')：\n' + body
+        + (act === 'read' ? '\n\n（如果没抓到内容，可以加 reset=true 再读一次；开发板只在复位后打印启动日志）' : '') });
+      return;
+    }
+
     if (a === 'create-pptx' || a === 'create_pptx') {
       const outPath = String(c.path || '').trim();
       const slides = Array.isArray(c.slides) ? c.slides : [];
@@ -3836,7 +3901,7 @@
     let stopReason = '';        // 为什么停下：dup / steps / abort
 
     try {
-      for (let step = 0; step < 30; step++) {
+      for (let step = 0; step < 60; step++) {
         if (abortCtl && abortCtl.signal.aborted) break;
         // ★ 上下文太长就先压缩早期步骤，否则模型会把开头的要求忘掉
         try {

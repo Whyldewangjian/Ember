@@ -21,7 +21,8 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const MAX_BUFFER = 200 * 1024;
+const MAX_BUFFER = 1024 * 1024;
+let bufCursor = 0;   // 游标：已经交给模型的位置（不再清空缓冲，避免两次轮询之间丢输出）
 
 let child = null;
 let outBuf = '';
@@ -72,7 +73,11 @@ function hitsRoot(cmd) {
 
 function pushOut(s) {
   outBuf += s;
-  if (outBuf.length > MAX_BUFFER) outBuf = outBuf.slice(outBuf.length - MAX_BUFFER);
+  if (outBuf.length > MAX_BUFFER) {
+    const cut = outBuf.length - MAX_BUFFER;
+    outBuf = outBuf.slice(cut);
+    bufCursor = Math.max(0, bufCursor - cut);
+  }
 }
 
 function isRunning() {
@@ -86,6 +91,7 @@ function start(cwd) {
   currentCwd = dir;
   outBuf = '';
   try {
+    bufCursor = 0;
     child = spawn('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', '-'], {
       cwd: dir,
       windowsHide: true,
@@ -98,6 +104,10 @@ function start(cwd) {
       pushOut('\n[shell 已退出，code=' + code + ']\n');
       child = null;
     });
+    // 立刻把输出编码切成 UTF-8：不加这句的话，pnputil / 报错信息里的中文全是乱码
+    try {
+      child.stdin.write('[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; $OutputEncoding=[System.Text.Encoding]::UTF8; chcp 65001 > $null\r\n');
+    } catch (e) {}
     return { ok: true, running: true, cwd: dir };
   } catch (e) {
     child = null;
@@ -138,18 +148,20 @@ function run(cmd, waitSec) {
     const s = start(currentCwd || os.homedir());
     if (!s.ok) return { ok: false, error: s.error || 'shell 起不来' };
   }
-  outBuf = '';   // 只返回这条命令产生的输出
+  // ★ 不再清空缓冲：改成游标式增量返回。
+  //   以前这里 outBuf='' 会把"两次轮询之间产生的输出"整段丢掉（串口抓日志就踩这个坑）。
   if (c) {
     try { child.stdin.write(c + '\r\n'); }
     catch (e) { return { ok: false, error: '写入命令失败：' + (e && e.message) }; }
   }
   let ms = Math.round((Number(waitSec) || 3) * 1000);
   if (!isFinite(ms) || ms < 300) ms = 300;
-  if (ms > 20000) ms = 20000;
+  if (ms > 60000) ms = 60000;
 
   return new Promise((resolve) => {
     setTimeout(() => {
-      const output = outBuf;
+      const output = outBuf.slice(bufCursor);
+      bufCursor = outBuf.length;
       // ★ 把明显的失败行挑出来单独返回。
       //   否则模型容易只看"命令跑完了"就总结成"已全部完成"，而实际有项目没删掉/没写成。
       //   规则收紧过一轮：以前只要出现"失败/错误/exception"就算，
@@ -174,8 +186,8 @@ function run(cmd, waitSec) {
         ok: true,
         running: isRunning(),
         cwd: currentCwd,
-        output: output.length > 12000 ? ('…（只显示最后 12000 字）\n' + output.slice(-12000)) : output,
-        truncated: output.length > 12000,
+        output: output.length > 60000 ? ('…（只显示最后 60000 字）\n' + output.slice(-60000)) : output,
+        truncated: output.length > 60000,
         failed: failed
       });
     }, ms);
